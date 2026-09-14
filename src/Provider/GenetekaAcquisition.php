@@ -54,8 +54,10 @@ final class GenetekaAcquisition
 
     public function recordType(RecordType $type): self
     {
-        if ($type === RecordType::ParishCensus) {
-            throw new InvalidArgumentException('Geneteka does not support parish_census records.');
+        if (!in_array($type, [RecordType::Birth, RecordType::Marriage, RecordType::Death], true)) {
+            throw new InvalidArgumentException(
+                'Unsupported Geneteka record type: ' . $type->value . '. Supported values: birth, marriage, death.',
+            );
         }
         return $this->with(static function (self $query) use ($type): void {
             $query->recordType = $type;
