@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace MyTree\IndexProviders\Tests\Integration;
 
+use GuzzleHttp\Psr7\Response;
 use InvalidArgumentException;
-use MyTree\IndexProviders\Domain\HttpResponse;
 use MyTree\IndexProviders\Domain\RecordType;
 use MyTree\IndexProviders\Provider\GenetekaProvider;
 use MyTree\IndexProviders\Storage\JsonCheckpointStore;
@@ -14,6 +14,7 @@ use MyTree\IndexProviders\Support\RateLimiter;
 use MyTree\IndexProviders\Tests\Support\FakeHttpClient;
 use MyTree\IndexProviders\Tests\TestCase;
 use MyTree\IndexProviders\Writer\JsonlWriter;
+use Psr\Http\Message\RequestInterface;
 
 final class GenetekaProviderTest extends TestCase
 {
@@ -23,7 +24,7 @@ final class GenetekaProviderTest extends TestCase
             ['recordsTotal' => '120', 'recordsFiltered' => '0', 'data' => []],
             JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $body, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $body));
         $dir = $this->tmp . '/gen-query';
         $writer = new JsonlWriter($dir . '/records.jsonl', false);
         $provider = $this->provider($http, $dir);
@@ -61,7 +62,7 @@ final class GenetekaProviderTest extends TestCase
     public function testFluentBuilderDoesNotMutateBaseQuery(): void
     {
         $provider = $this->provider(new FakeHttpClient(
-            fn (string $url): HttpResponse => new HttpResponse(200, [], '{}', $url),
+            fn (RequestInterface $request): Response => new Response(200, [], '{}'),
         ), $this->tmp . '/immutable');
 
         $base = $provider
@@ -86,7 +87,7 @@ final class GenetekaProviderTest extends TestCase
             ['recordsTotal' => '0', 'recordsFiltered' => '0', 'data' => []],
             JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $body, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $body));
         $dir = $this->tmp . '/gen-cache';
         $provider = $this->provider($http, $dir);
 
@@ -111,7 +112,7 @@ final class GenetekaProviderTest extends TestCase
             ['recordsTotal' => '1', 'recordsFiltered' => '1', 'data' => [$this->birthRow()]],
             JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $body, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $body));
         $dir = $this->tmp . '/gen';
         $writer = new JsonlWriter($dir . '/records.jsonl', false);
         $provider = $this->provider($http, $dir);
@@ -146,7 +147,7 @@ final class GenetekaProviderTest extends TestCase
     public function testReservedTransportParametersCannotBeOverridden(): void
     {
         $provider = $this->provider(new FakeHttpClient(
-            fn (string $url): HttpResponse => new HttpResponse(200, [], '{}', $url),
+            fn (RequestInterface $request): Response => new Response(200, [], '{}'),
         ), $this->tmp . '/reserved');
 
         $this->expectException(InvalidArgumentException::class);
@@ -160,10 +161,10 @@ final class GenetekaProviderTest extends TestCase
             'S' => $this->availabilityHtml('S', '10552', ['1701-1750']),
             'D' => $this->availabilityHtml('D', '8629', ['1800', '1802-1810']),
         ];
-        $http = new FakeHttpClient(function (string $url) use ($pages): HttpResponse {
-            $query = $this->query($url);
+        $http = new FakeHttpClient(function (RequestInterface $request) use ($pages): Response {
+            $query = $this->query((string) $request->getUri());
             $type = (string) ($query['bdm'] ?? '');
-            return new HttpResponse(200, [], $pages[$type] ?? '', $url);
+            return new Response(200, [], $pages[$type] ?? '');
         });
         $provider = $this->provider($http, $this->tmp . '/availability');
 
