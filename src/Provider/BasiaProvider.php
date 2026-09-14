@@ -92,6 +92,7 @@ final class BasiaProvider
         $fingerprint = $search->fingerprint();
         $stats = new AcquisitionStats();
         $checkpointKey = "basia:query:$fingerprint:complete";
+        $checkpointMetaKey = "basia:query:$fingerprint:meta";
 
         if (!$search->isForced() && $this->checkpoints->get($checkpointKey) === true) {
             $stats->skippedUnits++;
@@ -154,7 +155,6 @@ final class BasiaProvider
                 'retrieved_at' => $retrievedAt,
                 'query_fingerprint' => $fingerprint,
                 'query' => $search->configuration(),
-                'form_parameters' => $form,
                 'search_time_seconds' => $parsed['search_time_seconds'],
                 'complete' => true,
             ]);
@@ -166,7 +166,6 @@ final class BasiaProvider
                 $record,
                 $search,
                 $fingerprint,
-                $form,
                 (int) $index,
                 $requestUrl,
                 $rawPath,
@@ -177,13 +176,11 @@ final class BasiaProvider
             $stats->record($external->recordType);
         }
 
-        $this->checkpoints->set($checkpointKey, [
-            'complete' => true,
+        $this->checkpoints->set($checkpointMetaKey, [
             'record_count' => count($parsed['records']),
             'query_fingerprint' => $fingerprint,
             'updated_at' => gmdate(DATE_ATOM),
         ]);
-        // Keep compatibility with the existing boolean checkpoint convention.
         $this->checkpoints->set($checkpointKey, true);
 
         $this->progress->info('BASIA query ' . $fingerprint . ': ' . count($parsed['records']) . ' records parsed.');
@@ -236,15 +233,11 @@ final class BasiaProvider
         return $parameters;
     }
 
-    /**
-     * @param array<string,mixed> $record
-     * @param array<string,string> $form
-     */
+    /** @param array<string,mixed> $record */
     private function mapRecord(
         array $record,
         BasiaSearch $search,
         string $queryFingerprint,
-        array $form,
         int $resultIndex,
         string $requestUrl,
         string $rawPath,
@@ -288,7 +281,7 @@ final class BasiaProvider
 
         $raw = [
             'record_id' => $record['record_id'] ?? null,
-            'record_type_code' => $record['record_type_code'] ?? null,
+            'result_class_token' => $this->rawResultTypeToken($record['record_type_code'] ?? null),
             'record_type_label' => $record['record_type_label'] ?? null,
             'unit_type_label' => $record['unit_type'] ?? null,
             'name' => $record['name'] ?? null,
@@ -315,7 +308,6 @@ final class BasiaProvider
                 'request_method' => 'POST',
                 'query' => $search->configuration(),
                 'query_fingerprint' => $queryFingerprint,
-                'form_parameters' => $form,
                 'retrieved_at' => $retrievedAt,
                 'raw_response_path' => $rawPath,
                 'raw_response_sha256' => $rawSha256,
@@ -324,5 +316,16 @@ final class BasiaProvider
             ],
             representation: ValueRepresentation::indexerRendering('basia', $indexer),
         );
+    }
+
+    private function rawResultTypeToken(mixed $parserToken): ?string
+    {
+        return match ($parserToken) {
+            'a' => 'usca',
+            'b' => 'uscb',
+            'c' => 'uscc',
+            'd', 'z' => 'other',
+            default => is_string($parserToken) && str_starts_with($parserToken, 'unknown:') ? 'other' : null,
+        };
     }
 }
