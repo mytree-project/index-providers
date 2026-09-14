@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace MyTree\IndexProviders\Provider;
 
+use GuzzleHttp\Psr7\HttpFactory;
 use MyTree\IndexProviders\Contracts\CheckpointStoreInterface;
-use MyTree\IndexProviders\Contracts\HttpClientInterface;
 use MyTree\IndexProviders\Contracts\ProgressReporterInterface;
 use MyTree\IndexProviders\Contracts\RecordWriterInterface;
 use MyTree\IndexProviders\Domain\AcquisitionStats;
@@ -16,10 +16,15 @@ use MyTree\IndexProviders\Storage\RawResponseStore;
 use MyTree\IndexProviders\Support\NullProgressReporter;
 use MyTree\IndexProviders\Support\RateLimiter;
 use MyTree\IndexProviders\Support\SequentialHtmlTableParser;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 
 final class WolynMetrykiProvider
 {
+    private readonly RequestFactoryInterface $requestFactory;
+
     private const ENDPOINT = 'https://wolyn-metryki.pl/Wolyn/index.php';
     private const CONTENT_ENDPOINTS = [
         'https://www.wolyn-metryki.pl/nowa/index.php/zawartosc',
@@ -27,14 +32,16 @@ final class WolynMetrykiProvider
     ];
 
     public function __construct(
-        private readonly HttpClientInterface $http,
+        private readonly ClientInterface $http,
         private readonly CheckpointStoreInterface $checkpoints,
         private readonly RawResponseStore $rawStore,
         private readonly RateLimiter $rateLimiter = new RateLimiter(2000),
         private readonly SequentialHtmlTableParser $tableParser = new SequentialHtmlTableParser(),
         private readonly WolynParishListParser $parishListParser = new WolynParishListParser(),
         private readonly ProgressReporterInterface $progress = new NullProgressReporter(),
+        ?RequestFactoryInterface $requestFactory = null,
     ) {
+        $this->requestFactory = $requestFactory ?? new HttpFactory();
     }
 
     /** @return list<AvailableParish> */
@@ -47,19 +54,20 @@ final class WolynMetrykiProvider
             if ($body === null) {
                 try {
                     $this->rateLimiter->beforeRequest();
-                    $response = $this->http->get($url, [
+                    $response = $this->sendGet($url, [
                         'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     ]);
-                    if ($response->status < 200 || $response->status >= 300) {
-                        $lastError = "HTTP {$response->status} for $url";
+                    $status = $response->getStatusCode();
+                    if ($status < 200 || $status >= 300) {
+                        $lastError = "HTTP {$status} for $url";
                         continue;
                     }
-                    $body = $response->body;
+                    $body = (string) $response->getBody();
                     $this->rawStore->put('wolyn-metryki', $cacheKey, 'html', $body, [
                         'provider' => 'wolyn-metryki',
                         'purpose' => 'parish_discovery',
                         'requested_url' => $url,
-                        'http_status' => $response->status,
+                        'http_status' => $status,
                         'retrieved_at' => gmdate(DATE_ATOM),
                     ]);
                 } catch (\Throwable $e) {
@@ -119,21 +127,22 @@ final class WolynMetrykiProvider
             } else {
                 $this->progress->info("Metryki-Wołyń $parish: year $year.");
                 $this->rateLimiter->beforeRequest();
-                $response = $this->http->get($url, [
+                $response = $this->sendGet($url, [
                     'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Referer' => self::ENDPOINT,
                 ]);
                 $stats->requests++;
-                if ($response->status < 200 || $response->status >= 300) {
-                    throw new RuntimeException("Metryki-Wołyń HTTP {$response->status}: $url");
+                $status = $response->getStatusCode();
+                if ($status < 200 || $status >= 300) {
+                    throw new RuntimeException("Metryki-Wołyń HTTP {$status}: $url");
                 }
-                $body = $response->body;
+                $body = (string) $response->getBody();
                 $retrievedAt = gmdate(DATE_ATOM);
                 $rawSha256 = hash('sha256', $body);
                 $rawPath = $this->rawStore->put('wolyn-metryki', $cacheKey, 'html', $body, [
                     'provider' => 'wolyn-metryki',
                     'requested_url' => $url,
-                    'http_status' => $response->status,
+                    'http_status' => $status,
                     'retrieved_at' => $retrievedAt,
                     'parish' => $parish,
                     'year' => $year,
@@ -415,6 +424,17 @@ final class WolynMetrykiProvider
         if (count($cells) !== $expected) {
             throw new RuntimeException("Metryki-Wołyń $type row: expected $expected columns, got " . count($cells) . '.');
         }
+    }
+
+    /** @param array<string,string> $headers */
+    private function sendGet(string $url, array $headers = []): ResponseInterface
+    {
+        $request = $this->requestFactory->createRequest('GET', $url);
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+
+        return $this->http->sendRequest($request);
     }
 
     private function canonicalType(string $title): ?string
