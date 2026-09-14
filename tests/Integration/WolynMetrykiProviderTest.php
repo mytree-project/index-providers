@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyTree\IndexProviders\Tests\Integration;
 
-use MyTree\IndexProviders\Domain\HttpResponse;
+use GuzzleHttp\Psr7\Response;
 use MyTree\IndexProviders\Provider\WolynMetrykiProvider;
 use MyTree\IndexProviders\Storage\JsonCheckpointStore;
 use MyTree\IndexProviders\Storage\RawResponseStore;
@@ -12,13 +12,14 @@ use MyTree\IndexProviders\Support\RateLimiter;
 use MyTree\IndexProviders\Tests\Support\FakeHttpClient;
 use MyTree\IndexProviders\Tests\TestCase;
 use MyTree\IndexProviders\Writer\JsonlWriter;
+use Psr\Http\Message\RequestInterface;
 
 final class WolynMetrykiProviderTest extends TestCase
 {
     public function testMapsAllRecordTypesAndPreservesSourceFaithfulData(): void
     {
         $html = $this->fixture('wolyn_small.html');
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $html, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $html));
         $dir = $this->tmp . '/wolyn';
         $writer = new JsonlWriter($dir . '/records.jsonl', false);
         $provider = new WolynMetrykiProvider(

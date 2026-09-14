@@ -1,35 +1,92 @@
 # Integracja z Laravel / MyTree
 
-Pakiet celowo rozdziela cztery odpowiedzialności:
+Pakiet rozdziela odpowiedzialności providerów od infrastruktury aplikacji-hostującej:
 
 ```text
 Provider
-  ├── HttpClientInterface
+  ├── Psr\Http\Client\ClientInterface (PSR-18)
+  ├── Psr\Http\Message\RequestFactoryInterface (PSR-17)
   ├── CheckpointStoreInterface
   ├── RawResponseStore
   └── RecordWriterInterface
 ```
 
-Dzięki temu provider nie zna Eloquent, Redis, Laravel HTTP Client ani modeli MyTree.
+Requesty i responses używają kontraktów PSR-7. Providerzy pozostają framework-independent i nie zależą od Eloquent ani Laravel HTTP Client.
 
-## Proponowana przyszła wtyczka
+## Domyślna implementacja HTTP
 
-```text
-mytree-source-index-plugin/
-├── src/
-│   ├── MyTreeSourceIndexServiceProvider.php
-│   ├── Http/LaravelHttpClient.php
-│   ├── Storage/LaravelCheckpointStore.php
-│   ├── Writer/MyTreeExternalIndexWriter.php
-│   ├── Console/AcquireGenetekaCommand.php
-│   ├── Console/AcquireWolynCommand.php
-│   └── Jobs/AcquireIndexBatch.php
-└── composer.json
+Standalone `mytree/index-providers` instaluje Guzzle 7 i używa go jako domyślnej implementacji PSR-18. `DefaultHttpClientFactory` składa transport z:
+
+- Guzzle jako klienta sieciowego,
+- jawnej obsługi redirectów dla `GET`/`HEAD`,
+- ograniczonego retry dla błędów transportowych, `429` i `5xx`,
+- konfigurowalnego timeoutu i User-Agent.
+
+`NativeHttpClient` pozostaje tymczasowo jako deprecated compatibility shim, ale sam implementuje już PSR-18 i nie jest publiczną granicą integracyjną.
+
+## Wstrzyknięcie klienta przez MyTree
+
+MyTree nie musi używać domyślnego klienta. Provider przyjmuje dowolny `Psr\Http\Client\ClientInterface`. Można również podać własny `RequestFactoryInterface` jako ostatni argument konstruktora providera.
+
+Przykład z Guzzle:
+
+```php
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\HttpFactory;
+use MyTree\IndexProviders\Provider\GenetekaProvider;
+
+$http = new Client([
+    'timeout' => 60,
+    'http_errors' => false,
+    'headers' => [
+        'User-Agent' => 'MyTree/1.0',
+    ],
+]);
+
+$messages = new HttpFactory();
+
+$provider = new GenetekaProvider(
+    $http,
+    $checkpointStore,
+    $rawResponseStore,
+    requestFactory: $messages,
+);
 ```
 
-### `LaravelHttpClient`
+Ta sama zasada działa z innym klientem zgodnym z PSR-18. Provider nie powinien znać sposobu konfiguracji kontenera ani konkretnej biblioteki HTTP hosta.
 
-Implementuje `HttpClientInterface` i wewnętrznie używa `Illuminate\Support\Facades\Http` albo wstrzykniętego `Illuminate\Http\Client\Factory`.
+### Laravel service container
+
+W aplikacji MyTree naturalną granicą jest composition root / service provider:
+
+```php
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+
+$this->app->singleton(ClientInterface::class, function () {
+    return $this->configuredPsr18Client();
+});
+
+$this->app->singleton(RequestFactoryInterface::class, function () {
+    return $this->configuredPsr17Factory();
+});
+```
+
+Nie jest wymagany adapter `LaravelHttpClient implements MyTreeHttpClientInterface`, ponieważ pakiet nie definiuje już własnego interfejsu klienta HTTP.
+
+## Retry, timeout i rate limiting
+
+PSR-18 celowo nie definiuje timeoutów ani retry. Są one częścią composition/infrastructure:
+
+- timeout jest konfiguracją konkretnego klienta,
+- retry może być realizowane przez `RetryingHttpClient`, który również implementuje PSR-18,
+- domyślne retry obejmuje tylko `GET` i `HEAD`,
+- provider wymagający bezpiecznego read-only `POST` musi jawnie włączyć `POST` do polityki retry,
+- rate limiting pozostaje osobnym mechanizmem providera i nie jest częścią PSR-18.
+
+Redirecty są obsługiwane jawnie dla `GET`/`HEAD`. Nie zakładamy, że `sendRequest()` konkretnej implementacji automatycznie podąża za redirectami.
+
+## Pozostałe adaptery MyTree
 
 ### `LaravelCheckpointStore`
 
@@ -60,17 +117,6 @@ SourceLocator
 
 Warstwa stagingowa powinna zachować `provider_record_id`, `raw`, `fields` i pełne `provenance`.
 
-## Service container
-
-Przykładowe wiązania w przyszłym pakiecie:
-
-```php
-$this->app->bind(HttpClientInterface::class, LaravelHttpClient::class);
-$this->app->bind(CheckpointStoreInterface::class, LaravelCheckpointStore::class);
-```
-
-Same `GenetekaProvider` i `WolynMetrykiProvider` pozostają niezmienione.
-
 ## Kolejki
 
 Dla większych importów naturalnym krokiem będzie rozbijanie pracy na małe joby:
@@ -93,7 +139,6 @@ Provider ma pozyskiwać i wiernie reprezentować indeks. Nie powinien:
 - normalizować wariantów nazw jako „prawdę”,
 - traktować miejsca zdarzenia jako miejsca zamieszkania,
 - interpretować tekstu uwag jako pewnych relacji bez osobnej warstwy ekstrakcji.
-
 
 ## Discovery parafii
 

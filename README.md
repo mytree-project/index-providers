@@ -5,16 +5,52 @@ Samodzielny pakiet PHP do pobierania indeksów genealogicznych z:
 - **Geneteka** — JSON z wewnętrznego endpointu `getAct.php`, stronicowanie,
 - **Metryki-Wołyń** — HTML wyszukiwarki, pobieranie parafii rok po roku.
 
-Pakiet nie zależy od Laravela. Został zaprojektowany tak, aby później można było wykorzystać te same klasy providerów we wtyczce/pakiecie Laravel dla MyTree poprzez podmianę klienta HTTP, checkpointów i writera.
+Pakiet nie zależy od Laravela. Providerzy przyjmują standardowy klient HTTP PSR-18, więc MyTree lub inna aplikacja może wstrzyknąć własną implementację bez adaptera do niestandardowego interfejsu MyTree. Standalone CLI używa domyślnej kompozycji opartej na Guzzle 7.
 
 ## Wymagania
 
 - PHP 8.2+
-- `allow_url_fopen=1` dla wbudowanego klienta HTTP CLI
-- brak wymaganych bibliotek zewnętrznych
-- brak wymogu `ext-dom`, `curl` i `mbstring`
+- Composer 2
+- zależności z `composer.json` (`guzzlehttp/guzzle` oraz kontrakty PSR-18/PSR-7/PSR-17)
+- brak zależności od Laravel
 
-`composer.json` służy przede wszystkim do autoloadingu PSR-4 przy późniejszym użyciu jako biblioteka. CLI działa również bez `composer install`, poprzez `bootstrap.php`.
+Przed użyciem biblioteki lub CLI zainstaluj zależności:
+
+```bash
+composer install
+```
+
+## HTTP i integracja
+
+Publiczną granicą klienta HTTP jest `Psr\Http\Client\ClientInterface`. Requesty i responses używają PSR-7, a provider może przyjąć również własny `Psr\Http\Message\RequestFactoryInterface`.
+
+Domyślny klient standalone można utworzyć przez:
+
+```php
+use MyTree\IndexProviders\Http\DefaultHttpClientFactory;
+
+$http = DefaultHttpClientFactory::create(
+    timeoutSeconds: 60,
+    maxAttempts: 3,
+);
+```
+
+`NativeHttpClient` pozostaje tymczasowo jako deprecated compatibility shim, ale sam implementuje już PSR-18 i deleguje do domyślnego stosu Guzzle.
+
+Aplikacja hostująca może zamiast tego wstrzyknąć dowolny kompatybilny klient PSR-18 oraz, opcjonalnie, własną fabrykę PSR-17:
+
+```php
+$provider = new GenetekaProvider(
+    $myPsr18Client,
+    $checkpointStore,
+    $rawResponseStore,
+    requestFactory: $myPsr17RequestFactory,
+);
+```
+
+Domyślna kompozycja zachowuje dotychczasową politykę retry dla błędów transportowych, `429` i `5xx`, a redirecty dla `GET`/`HEAD` są obsługiwane jawnie. Retry domyślnie nie obejmuje `POST`; provider wykonujący bezpieczny read-only POST musi włączyć go świadomie. Rate limiting pozostaje osobną odpowiedzialnością providera.
+
+Więcej: [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md).
 
 ## Szybki start
 
@@ -41,7 +77,7 @@ Jedna operacja Geneteki odpowiada jednemu stanowi formularza i jednemu typowi re
 
 ### Fluent API Geneteki
 
-Provider nie przyjmuje już rosnącej listy argumentów w `acquire(...)`. Każde zapytanie buduje się jako niemutowalną konfigurację:
+Provider nie przyjmuje rosnącej listy argumentów w `acquire(...)`. Każde zapytanie buduje się jako niemutowalną konfigurację:
 
 ```php
 $stats = $provider
@@ -100,7 +136,6 @@ Metryki-Wołyń jest pobierany **rok po roku**. Jedna odpowiedź może zawierać
 - `marriage`,
 - `death`,
 - `parish_census`.
-
 
 ## Odkrywanie dostępnych parafii
 
@@ -285,7 +320,7 @@ Dzięki temu późniejszy importer MyTree może utworzyć `Source`, `SourceLocat
 
 ## Testy
 
-Testy są napisane w PHPUnit. Najpierw zainstaluj zależności developerskie:
+Testy są napisane w PHPUnit. Najpierw zainstaluj zależności:
 
 ```bash
 composer install
@@ -302,6 +337,8 @@ Bezpośrednie uruchomienie PHPUnit:
 ```bash
 vendor/bin/phpunit
 ```
+
+Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych.
 
 ## Integracja z Laravel/MyTree
 
