@@ -25,7 +25,12 @@ final class HttpClientTest extends TestCase
             new Response(200, [], 'ok'),
         ];
         $http = new FakeHttpClient(
-            static fn (RequestInterface $request): ResponseInterface => array_shift($responses),
+            static function (RequestInterface $request) use (&$responses): ResponseInterface {
+                $response = array_shift($responses);
+                self::assertInstanceOf(ResponseInterface::class, $response);
+
+                return $response;
+            },
         );
         $sleeps = [];
         $client = new RetryingHttpClient(
@@ -67,6 +72,28 @@ final class HttpClientTest extends TestCase
         self::assertSame(200, $client->sendRequest(new Request('GET', 'https://example.test/data'))->getStatusCode());
         self::assertSame([2], $sleeps);
         self::assertSame(2, $http->calls);
+    }
+
+    public function testRewindsSeekableRequestBodyBeforeRetry(): void
+    {
+        $attempt = 0;
+        $bodies = [];
+        $http = new FakeHttpClient(static function (RequestInterface $request) use (&$attempt, &$bodies): ResponseInterface {
+            $attempt++;
+            $bodies[] = (string) $request->getBody();
+
+            return $attempt === 1 ? new Response(503) : new Response(200);
+        });
+        $client = new RetryingHttpClient(
+            $http,
+            maxAttempts: 2,
+            sleeper: static function (int $seconds): void {
+            },
+            retryableMethods: ['POST'],
+        );
+
+        self::assertSame(200, $client->sendRequest(new Request('POST', 'https://example.test/search', [], 'a=1'))->getStatusCode());
+        self::assertSame(['a=1', 'a=1'], $bodies);
     }
 
     public function testFollowsGetRedirectAndResolvesRelativeLocation(): void
