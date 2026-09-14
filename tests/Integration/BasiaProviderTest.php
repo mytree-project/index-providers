@@ -68,9 +68,11 @@ final class BasiaProviderTest extends TestCase
         self::assertNull($birth->parish, 'BASIA unit/locality must not be coerced into a parish.');
         self::assertSame(1815, $birth->year);
         self::assertSame('akt urodzenia/chrztu', $birth->raw['record_type_label']);
-        self::assertSame('a', $birth->raw['record_type_code']);
+        self::assertSame('usca', $birth->raw['result_class_token']);
+        self::assertArrayNotHasKey('record_type_code', $birth->raw);
         self::assertSame('https://www.szukajwarchiwach.gov.pl/jednostka/1#scan12', $birth->fields['scan_url']);
         self::assertSame('https://basia.famula.pl/record/token101', $birth->provenance['source_url']);
+        self::assertArrayNotHasKey('form_parameters', $birth->provenance);
         self::assertSame('indexer_rendering', $birth->representation?->kind);
         self::assertFalse($birth->representation?->originalDocumentWordingAsserted ?? true);
 
@@ -78,6 +80,7 @@ final class BasiaProviderTest extends TestCase
         self::assertStringStartsWith('provider:basia:', $unknown->recordType);
         self::assertNotSame('other', $unknown->recordType);
         self::assertSame('księga ludności', $unknown->raw['record_type_label']);
+        self::assertSame('other', $unknown->raw['result_class_token']);
 
         $fingerprint = $search->fingerprint();
         self::assertTrue($checkpoints->get("basia:query:$fingerprint:complete"));
