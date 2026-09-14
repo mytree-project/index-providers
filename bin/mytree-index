@@ -180,7 +180,6 @@ function renderParishes(array $parishes, string $format): string
     return $out;
 }
 
-
 /** @param list<\MyTree\IndexProviders\Provider\GenetekaRecordAvailability> $items */
 function renderAvailability(array $items, string $format): string
 {
@@ -212,6 +211,22 @@ function renderAvailability(array $items, string $format): string
             . $ranges . PHP_EOL;
     }
     return $out;
+}
+
+/** @return list<RecordType> */
+function genetekaSupportedRecordTypes(): array
+{
+    return [RecordType::Birth, RecordType::Marriage, RecordType::Death];
+}
+
+function genetekaRecordType(string $value): RecordType
+{
+    $type = RecordType::tryFrom(strtolower(trim($value)));
+    if ($type === null || !in_array($type, genetekaSupportedRecordTypes(), true)) {
+        throw new InvalidArgumentException("Unsupported Geneteka record type '$value'. Use birth, marriage or death.");
+    }
+
+    return $type;
 }
 
 $command = $argv[1] ?? null;
@@ -271,7 +286,6 @@ if ($discoveryMode) {
     }
 }
 
-
 if ($command === 'geneteka' && isset($options['availability'])) {
     $cacheDir = isset($options['output']) && is_string($options['output']) && trim($options['output']) !== ''
         ? rtrim(trim($options['output']), '/')
@@ -284,11 +298,7 @@ if ($command === 'geneteka' && isset($options['availability'])) {
         progress: $progress,
     );
     try {
-        $typeValue = strtolower(required($options, 'type'));
-        $type = RecordType::tryFrom($typeValue);
-        if ($type === null || $type === RecordType::ParishCensus) {
-            throw new InvalidArgumentException("Unsupported Geneteka record type '$typeValue'. Use birth, marriage or death.");
-        }
+        $type = genetekaRecordType(required($options, 'type'));
         $items = $provider->discoverAvailability(
             required($options, 'region'),
             $type,
@@ -321,11 +331,8 @@ try {
         $region = required($options, 'region');
         $parishId = required($options, 'parish-id');
         $parish = isset($options['parish']) && is_string($options['parish']) ? trim($options['parish']) : null;
-        $typeValue = isset($options['type']) && is_string($options['type']) ? strtolower(trim($options['type'])) : 'birth';
-        $type = RecordType::tryFrom($typeValue);
-        if ($type === null || $type === RecordType::ParishCensus) {
-            throw new InvalidArgumentException("Unsupported Geneteka record type '$typeValue'. Use birth, marriage or death.");
-        }
+        $typeValue = isset($options['type']) && is_string($options['type']) ? $options['type'] : 'birth';
+        $type = genetekaRecordType($typeValue);
         $pageSize = max(1, min(500, (int) ($options['page-size'] ?? 50)));
 
         $provider = new GenetekaProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
