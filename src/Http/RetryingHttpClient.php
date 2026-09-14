@@ -49,6 +49,13 @@ final class RetryingHttpClient implements ClientInterface
         $attempt = 0;
         while (true) {
             $attempt++;
+            if ($attempt > 1) {
+                $body = $request->getBody();
+                if (!$body->isSeekable()) {
+                    throw new InvalidArgumentException('Retryable HTTP requests must have a seekable request body.');
+                }
+                $body->rewind();
+            }
 
             try {
                 $response = $this->client->sendRequest($request);
