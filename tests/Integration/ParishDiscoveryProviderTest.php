@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MyTree\IndexProviders\Tests\Integration;
 
-use MyTree\IndexProviders\Domain\HttpResponse;
+use GuzzleHttp\Psr7\Response;
 use MyTree\IndexProviders\Provider\GenetekaProvider;
 use MyTree\IndexProviders\Provider\WolynMetrykiProvider;
 use MyTree\IndexProviders\Storage\JsonCheckpointStore;
@@ -12,13 +12,14 @@ use MyTree\IndexProviders\Storage\RawResponseStore;
 use MyTree\IndexProviders\Support\RateLimiter;
 use MyTree\IndexProviders\Tests\Support\FakeHttpClient;
 use MyTree\IndexProviders\Tests\TestCase;
+use Psr\Http\Message\RequestInterface;
 
 final class ParishDiscoveryProviderTest extends TestCase
 {
     public function testGenetekaDiscoversRegionsAndParishes(): void
     {
         $html = $this->fixture('geneteka_parishes.html');
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $html, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $html));
         $dir = $this->tmp . '/gen-discovery';
         $provider = new GenetekaProvider(
             $http,
@@ -39,7 +40,7 @@ final class ParishDiscoveryProviderTest extends TestCase
     public function testWolynDiscoversAvailableParishes(): void
     {
         $html = $this->fixture('wolyn_content.html');
-        $http = new FakeHttpClient(fn (string $url): HttpResponse => new HttpResponse(200, [], $html, $url));
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $html));
         $dir = $this->tmp . '/wolyn-discovery';
         $provider = new WolynMetrykiProvider(
             $http,
