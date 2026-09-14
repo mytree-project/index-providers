@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace MyTree\IndexProviders\Provider;
 
+use GuzzleHttp\Psr7\HttpFactory;
 use MyTree\IndexProviders\Contracts\CheckpointStoreInterface;
-use MyTree\IndexProviders\Contracts\HttpClientInterface;
 use MyTree\IndexProviders\Contracts\ProgressReporterInterface;
 use MyTree\IndexProviders\Contracts\RecordWriterInterface;
 use MyTree\IndexProviders\Domain\AcquisitionStats;
@@ -17,6 +17,9 @@ use MyTree\IndexProviders\Storage\RawResponseStore;
 use MyTree\IndexProviders\Support\HtmlSelectParser;
 use MyTree\IndexProviders\Support\NullProgressReporter;
 use MyTree\IndexProviders\Support\RateLimiter;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 
 final class GenetekaProvider
@@ -24,11 +27,13 @@ final class GenetekaProvider
     /** @var array<string,true> */
     private array $warnedParishMismatches = [];
 
+    private readonly RequestFactoryInterface $requestFactory;
+
     private const ENDPOINT = 'https://geneteka.genealodzy.pl/api/getAct.php';
     private const INDEX_ENDPOINT = 'https://geneteka.genealodzy.pl/index.php';
 
     public function __construct(
-        private readonly HttpClientInterface $http,
+        private readonly ClientInterface $http,
         private readonly CheckpointStoreInterface $checkpoints,
         private readonly RawResponseStore $rawStore,
         private readonly RateLimiter $rateLimiter = new RateLimiter(2000),
@@ -36,7 +41,9 @@ final class GenetekaProvider
         private readonly HtmlSelectParser $selectParser = new HtmlSelectParser(),
         private readonly ProgressReporterInterface $progress = new NullProgressReporter(),
         private readonly GenetekaAvailabilityParser $availabilityParser = new GenetekaAvailabilityParser(),
+        ?RequestFactoryInterface $requestFactory = null,
     ) {
+        $this->requestFactory = $requestFactory ?? new HttpFactory();
     }
 
     /**
@@ -192,22 +199,24 @@ final class GenetekaProvider
         }
 
         $this->rateLimiter->beforeRequest();
-        $response = $this->http->get($url, [
+        $response = $this->sendGet($url, [
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Referer' => self::INDEX_ENDPOINT,
         ]);
-        if ($response->status < 200 || $response->status >= 300) {
-            throw new RuntimeException("Geneteka HTTP {$response->status}: $url");
+        $status = $response->getStatusCode();
+        if ($status < 200 || $status >= 300) {
+            throw new RuntimeException("Geneteka HTTP {$status}: $url");
         }
-        $this->rawStore->put('geneteka', $cacheKey, 'html', $response->body, [
+        $body = (string) $response->getBody();
+        $this->rawStore->put('geneteka', $cacheKey, 'html', $body, [
             'provider' => 'geneteka',
             'purpose' => 'parish_discovery',
             'requested_url' => $url,
-            'http_status' => $response->status,
+            'http_status' => $status,
             'retrieved_at' => gmdate(DATE_ATOM),
             'region' => $region,
         ]);
-        return [$response->body, $url];
+        return [$body, $url];
     }
 
     /** @return array{0:string,1:string} */
@@ -228,24 +237,26 @@ final class GenetekaProvider
         }
 
         $this->rateLimiter->beforeRequest();
-        $response = $this->http->get($url, [
+        $response = $this->sendGet($url, [
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Referer' => self::INDEX_ENDPOINT,
         ]);
-        if ($response->status < 200 || $response->status >= 300) {
-            throw new RuntimeException("Geneteka HTTP {$response->status}: $url");
+        $status = $response->getStatusCode();
+        if ($status < 200 || $status >= 300) {
+            throw new RuntimeException("Geneteka HTTP {$status}: $url");
         }
-        $this->rawStore->put('geneteka', $cacheKey, 'html', $response->body, [
+        $body = (string) $response->getBody();
+        $this->rawStore->put('geneteka', $cacheKey, 'html', $body, [
             'provider' => 'geneteka',
             'purpose' => 'record_availability',
             'requested_url' => $url,
-            'http_status' => $response->status,
+            'http_status' => $status,
             'retrieved_at' => gmdate(DATE_ATOM),
             'region' => $region,
             'record_type' => $type->value,
             'parish_id' => $parishId,
         ]);
-        return [$response->body, $url];
+        return [$body, $url];
     }
 
     /** @return list<AvailableParish> */
@@ -258,18 +269,19 @@ final class GenetekaProvider
         $body = !$force ? $this->rawStore->get('geneteka', $cacheKey, 'json') : null;
         if ($body === null) {
             $this->rateLimiter->beforeRequest();
-            $response = $this->http->get($url, [
+            $response = $this->sendGet($url, [
                 'Referer' => self::INDEX_ENDPOINT,
                 'X-Requested-With' => 'XMLHttpRequest',
                 'Accept' => 'application/json,text/javascript,*/*;q=0.1',
             ]);
-            if ($response->status < 200 || $response->status >= 300) {
+            $status = $response->getStatusCode();
+            if ($status < 200 || $status >= 300) {
                 return [];
             }
-            $body = $response->body;
+            $body = (string) $response->getBody();
             $this->rawStore->put('geneteka', $cacheKey, 'json', $body, [
                 'provider' => 'geneteka', 'purpose' => 'parish_discovery_api_fallback',
-                'requested_url' => $url, 'http_status' => $response->status,
+                'requested_url' => $url, 'http_status' => $status,
                 'retrieved_at' => gmdate(DATE_ATOM), 'region' => $region,
             ]);
         }
@@ -392,22 +404,23 @@ final class GenetekaProvider
         } else {
             $this->progress->info("Geneteka $region/$parishId {$type->value}: page " . ($page + 1) . " (start=$start).");
             $this->rateLimiter->beforeRequest();
-            $response = $this->http->get($url, [
+            $response = $this->sendGet($url, [
                 'Referer' => self::INDEX_ENDPOINT,
                 'X-Requested-With' => 'XMLHttpRequest',
                 'Accept' => 'application/json,text/javascript,*/*;q=0.1',
             ]);
             $stats->requests++;
-            if ($response->status < 200 || $response->status >= 300) {
-                throw new RuntimeException("Geneteka HTTP {$response->status}: $url");
+            $status = $response->getStatusCode();
+            if ($status < 200 || $status >= 300) {
+                throw new RuntimeException("Geneteka HTTP {$status}: $url");
             }
-            $body = $response->body;
+            $body = (string) $response->getBody();
             $retrievedAt = gmdate(DATE_ATOM);
             $rawSha256 = hash('sha256', $body);
             $rawPath = $this->rawStore->put('geneteka', $cacheKey, 'json', $body, [
                 'provider' => 'geneteka',
                 'requested_url' => $url,
-                'http_status' => $response->status,
+                'http_status' => $status,
                 'retrieved_at' => $retrievedAt,
                 'region' => $region,
                 'parish_id' => $parishId,
@@ -571,6 +584,17 @@ final class GenetekaProvider
                 indexedBy: isset($metadata['indexed_by']) ? (string) $metadata['indexed_by'] : null,
             ),
         );
+    }
+
+    /** @param array<string,string> $headers */
+    private function sendGet(string $url, array $headers = []): ResponseInterface
+    {
+        $request = $this->requestFactory->createRequest('GET', $url);
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+
+        return $this->http->sendRequest($request);
     }
 
     private function visibleText(string $value): string
