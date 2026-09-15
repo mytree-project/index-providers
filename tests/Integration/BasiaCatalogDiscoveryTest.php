@@ -42,6 +42,8 @@ final class BasiaCatalogDiscoveryTest extends TestCase
         self::assertCount(6, $second);
         self::assertCount(6, $refreshed);
         self::assertSame(2, $http->calls);
+        self::assertSame($first[0]->catalogUnitKey, $second[0]->catalogUnitKey);
+        self::assertSame($first[0]->catalogUnitKey, $refreshed[0]->catalogUnitKey);
         self::assertSame('GET', $http->requests[0]->getMethod());
         self::assertSame(
             'https://basia.famula.pl/content-all.php?lang=pl',
