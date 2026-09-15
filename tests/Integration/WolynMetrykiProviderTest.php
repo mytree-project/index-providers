@@ -66,8 +66,9 @@ final class WolynMetrykiProviderTest extends TestCase
         $lines = file($dir . '/records.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
         self::assertCount(1, $lines);
         $record = json_decode($lines[0], true, flags: JSON_THROW_ON_ERROR);
+        $expectedType = 'provider:wolyn-metryki:' . substr(hash('sha256', 'Potwierdzenia'), 0, 12);
 
-        self::assertStringStartsWith('provider:wolyn-metryki:', $record['record_type'] ?? '');
+        self::assertSame($expectedType, $record['record_type'] ?? null);
         self::assertNull($record['year'] ?? null, 'Unknown provider table columns must not be guessed as event-year semantics.');
         self::assertSame('Szumsk', $record['parish'] ?? null);
         self::assertSame('Potwierdzenia', $record['raw']['section_title'] ?? null);
