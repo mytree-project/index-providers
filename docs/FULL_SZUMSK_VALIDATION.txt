@@ -1,4 +1,4 @@
-Zgony:8788
-Urodzenia:14828
-Śluby:4145
-Spisy parafian:0
+Deaths:8788
+Births:14828
+Marriages:4145
+Parish census:0
