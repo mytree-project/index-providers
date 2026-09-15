@@ -6,6 +6,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/bootstrap.php';
 
 use MyTree\IndexProviders\Domain\AvailableParish;
+use MyTree\IndexProviders\Domain\IndexCatalogUnit;
 use MyTree\IndexProviders\Domain\RecordType;
 use MyTree\IndexProviders\Http\DefaultHttpClientFactory;
 use MyTree\IndexProviders\Provider\BasiaProvider;
@@ -37,6 +38,9 @@ Bounded search — BASIA:
     --surname=Kowalski --name=Jan --from=1880 --to=1900 \
     --type=birth --output=var/basia-kowalski
 
+Discover BASIA indexed catalog units:
+  php bin/mytree-index basia --list-catalog --format=json
+
 Discover available parishes — Geneteka, one region:
   php bin/mytree-index geneteka --list-parishes --region=06mp
 
@@ -51,7 +55,8 @@ Discover available parishes — Metryki-Wołyń:
   php bin/mytree-index wolyn --list-parishes
 
 Discovery options:
-  --list-parishes   Return available parishes instead of downloading indexes
+  --list-parishes   Geneteka/Metryki-Wołyń: return legacy parish discovery
+  --list-catalog    BASIA: return generalized indexed catalog units
   --all-regions     Geneteka only: discover parishes in every region
   --format=table    table (default), json or jsonl
   --save=FILE       Additionally save discovery result to FILE
@@ -199,6 +204,72 @@ function renderParishes(array $parishes, string $format): string
     return $out;
 }
 
+/** @param list<IndexCatalogUnit> $units */
+function renderCatalogUnits(array $units, string $format): string
+{
+    $rows = array_map(static fn (IndexCatalogUnit $unit): array => $unit->jsonSerialize(), $units);
+    if ($format === 'json') {
+        return json_encode($rows, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL;
+    }
+    if ($format === 'jsonl') {
+        return implode('', array_map(
+            static fn (array $row): string => json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL,
+            $rows,
+        ));
+    }
+    if ($format !== 'table') {
+        throw new InvalidArgumentException('Unsupported --format. Use table, json or jsonl.');
+    }
+    if ($units === []) {
+        return "No catalog units found.\n";
+    }
+
+    $header = ['LOCALITY', 'COUNTY', 'UNIT', 'KIND', 'DENOMINATION', 'AVAILABILITY'];
+    $data = array_map(static function (IndexCatalogUnit $unit): array {
+        $availability = [];
+        foreach ($unit->availability as $item) {
+            $ranges = implode(',', array_map(
+                static fn ($range): string => $range->from === $range->to
+                    ? (string) $range->from
+                    : $range->from . '-' . $range->to,
+                $item->yearRanges,
+            ));
+            $availability[] = $item->recordType . ':' . $ranges;
+        }
+
+        return [
+            $unit->locality?->name ?? '',
+            $unit->locality?->county ?? '',
+            $unit->unitName ?? '',
+            $unit->unitKind,
+            $unit->denomination ?? '',
+            implode('; ', $availability),
+        ];
+    }, $units);
+
+    $widths = array_map('strlen', $header);
+    foreach ($data as $row) {
+        foreach ($row as $i => $cell) {
+            $widths[$i] = max($widths[$i], strlen((string) $cell));
+        }
+    }
+    $line = static function (array $row) use ($widths): string {
+        $parts = [];
+        foreach ($row as $i => $cell) {
+            $parts[] = str_pad((string) $cell, $widths[$i]);
+        }
+        return rtrim(implode('  ', $parts));
+    };
+
+    $out = $line($header) . PHP_EOL;
+    $out .= $line(array_map(static fn (int $w): string => str_repeat('-', $w), $widths)) . PHP_EOL;
+    foreach ($data as $row) {
+        $out .= $line($row) . PHP_EOL;
+    }
+
+    return $out;
+}
+
 /** @param list<\MyTree\IndexProviders\Provider\GenetekaRecordAvailability> $items */
 function renderAvailability(array $items, string $format): string
 {
@@ -273,7 +344,13 @@ if (isset($options['help'])) {
     usage(0);
 }
 
-$discoveryMode = isset($options['list-parishes']);
+$parishDiscoveryMode = isset($options['list-parishes']);
+$catalogDiscoveryMode = isset($options['list-catalog']);
+if ($parishDiscoveryMode && $catalogDiscoveryMode) {
+    fwrite(STDERR, "Use only one discovery mode: --list-parishes or --list-catalog.\n");
+    exit(2);
+}
+$discoveryMode = $parishDiscoveryMode || $catalogDiscoveryMode;
 $restart = isset($options['restart']);
 $refresh = isset($options['refresh']) || $restart;
 $isBasia = $command === 'basia';
@@ -296,21 +373,28 @@ if ($discoveryMode) {
     $rawStore = new RawResponseStore($cacheDir . '/raw');
 
     try {
-        if ($command === 'geneteka') {
-            $provider = new GenetekaProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
-            $parishes = isset($options['all-regions'])
-                ? $provider->listAllParishes($refresh)
-                : $provider->listParishes(required($options, 'region'), $refresh);
-        } elseif ($command === 'wolyn') {
-            $provider = new WolynMetrykiProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
-            $parishes = $provider->listParishes($refresh);
+        $format = isset($options['format']) && is_string($options['format']) ? strtolower(trim($options['format'])) : 'table';
+        if ($catalogDiscoveryMode) {
+            if ($command !== 'basia') {
+                throw new InvalidArgumentException('--list-catalog is currently supported only by BASIA.');
+            }
+            $provider = new BasiaProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
+            $rendered = renderCatalogUnits($provider->listCatalogUnits($refresh), $format);
         } else {
-            fwrite(STDERR, "Unknown or unsupported discovery command: $command\n");
-            usage(2);
+            if ($command === 'geneteka') {
+                $provider = new GenetekaProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
+                $parishes = isset($options['all-regions'])
+                    ? $provider->listAllParishes($refresh)
+                    : $provider->listParishes(required($options, 'region'), $refresh);
+            } elseif ($command === 'wolyn') {
+                $provider = new WolynMetrykiProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
+                $parishes = $provider->listParishes($refresh);
+            } else {
+                throw new InvalidArgumentException("Unsupported --list-parishes provider: $command");
+            }
+            $rendered = renderParishes($parishes, $format);
         }
 
-        $format = isset($options['format']) && is_string($options['format']) ? strtolower(trim($options['format'])) : 'table';
-        $rendered = renderParishes($parishes, $format);
         fwrite(STDOUT, $rendered);
         if (isset($options['save']) && is_string($options['save']) && trim($options['save']) !== '') {
             $savePath = trim($options['save']);
