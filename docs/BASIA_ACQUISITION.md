@@ -178,7 +178,9 @@ Incomplete or malformed search responses are not written as successful raw-cache
 
 ## Catalog completeness and cache behavior
 
-Catalog discovery parses the complete catalogue before writing the reusable cache. Each parsed locality must contain the catalogue completion metadata used by the page (`Razem wpisów` and `Indeksujący`). A truncated/malformed catalogue therefore fails before it can become a successful cache entry.
+Catalog discovery parses and structurally validates the catalogue before writing reusable cache. Every parsed locality must contain the completion metadata that BASIA publishes for a locality (`Razem wpisów` and `Indeksujący`); malformed localities or responses interrupted inside a locality fail before cache promotion.
+
+Unlike bounded search, the BASIA catalogue does not expose a known page-level completion marker comparable to `Czas wyszukiwania`. The provider therefore does **not** claim that it can prove global completeness of an otherwise structurally valid snapshot that the upstream server itself might have ended cleanly after a prefix of the catalogue. The cache guarantee is intentionally limited to transport success plus structural validity of the returned snapshot.
 
 A valid catalogue response is cached as:
 
