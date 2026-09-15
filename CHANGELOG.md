@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added the read-only `mytree-index-view` TUI for browsing versioned acquisition manifests and JSONL records offline, including search, type/year filters, record details, provenance and scan locators.
+
 ## 0.5.0
 
 - **Breaking:** replaced Geneteka's multi-argument `acquire(...)` API with immutable fluent `acquisition()` builder representing one provider-form query and one `RecordType`.

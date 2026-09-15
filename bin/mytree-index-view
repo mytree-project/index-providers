@@ -1,0 +1,157 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/bootstrap.php';
+
+use MyTree\IndexProviders\Viewer\AcquisitionRunLoader;
+use MyTree\IndexProviders\Viewer\AnsiTerminal;
+use MyTree\IndexProviders\Viewer\RecordProjector;
+use MyTree\IndexProviders\Viewer\ViewerRenderer;
+use MyTree\IndexProviders\Viewer\ViewerState;
+
+function viewerUsage(int $exitCode = 0): never
+{
+    $stream = $exitCode === 0 ? STDOUT : STDERR;
+    fwrite($stream, <<<TXT
+MyTree Index Results — read-only TUI
+
+Usage:
+  php bin/mytree-index-view <acquisition-run-directory>
+
+The directory must contain a supported manifest.json and records.jsonl.
+The viewer performs no network requests and does not modify acquisition files.
+TXT . PHP_EOL);
+    exit($exitCode);
+}
+
+$directory = $argv[1] ?? null;
+if ($directory === null || in_array($directory, ['--help', '-h', 'help'], true)) {
+    viewerUsage($directory === null ? 2 : 0);
+}
+
+try {
+    $run = (new AcquisitionRunLoader())->load($directory);
+    $projector = new RecordProjector();
+    $projections = array_map(static fn (array $record) => $projector->project($record), $run->records);
+    $state = new ViewerState($projections, $projector);
+    $renderer = new ViewerRenderer();
+    $terminal = new AnsiTerminal();
+    $terminal->enter();
+
+    $inputMode = null;
+    $inputBuffer = '';
+    $message = null;
+
+    try {
+        while (true) {
+            [$width, $height] = $terminal->size();
+            $prompt = match ($inputMode) {
+                'search' => '/ ' . $inputBuffer,
+                'filter' => 'filter> ' . $inputBuffer,
+                default => null,
+            };
+            $terminal->draw($renderer->render($run, $state, $width, $height, $prompt, $message));
+            $message = null;
+
+            $key = $terminal->readKey();
+            if ($key === '') {
+                continue;
+            }
+
+            if ($inputMode === 'search') {
+                if ($key === "\033") {
+                    $inputMode = null;
+                    continue;
+                }
+                if ($key === "\r" || $key === "\n") {
+                    $inputMode = null;
+                    continue;
+                }
+                if ($key === "\x7f" || $key === "\x08") {
+                    $characters = preg_split('//u', $inputBuffer, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                    array_pop($characters);
+                    $inputBuffer = implode('', $characters);
+                    $state->setSearch($inputBuffer);
+                    continue;
+                }
+                if (preg_match('/^[\P{C}]$/u', $key) === 1) {
+                    $inputBuffer .= $key;
+                    $state->setSearch($inputBuffer);
+                }
+                continue;
+            }
+
+            if ($inputMode === 'filter') {
+                if ($key === "\033") {
+                    $inputMode = null;
+                    continue;
+                }
+                if ($key === "\r" || $key === "\n") {
+                    try {
+                        $state->setFilterExpression($inputBuffer);
+                        $inputMode = null;
+                    } catch (InvalidArgumentException $e) {
+                        $message = '[FILTER ERROR] ' . $e->getMessage();
+                    }
+                    continue;
+                }
+                if ($key === "\x7f" || $key === "\x08") {
+                    $characters = preg_split('//u', $inputBuffer, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                    array_pop($characters);
+                    $inputBuffer = implode('', $characters);
+                    continue;
+                }
+                if (preg_match('/^[\P{C}]$/u', $key) === 1) {
+                    $inputBuffer .= $key;
+                }
+                continue;
+            }
+
+            if ($key === 'q') {
+                break;
+            }
+            if ($key === '?') {
+                $state->showHelp();
+                continue;
+            }
+            if ($key === "\033" || $key === "\x7f" || $key === "\x08") {
+                $state->showList();
+                continue;
+            }
+            if ($state->view() === 'details') {
+                if ($key === "\033[A" || $key === 'k') {
+                    $state->scrollDetails(-1);
+                } elseif ($key === "\033[B" || $key === 'j') {
+                    $state->scrollDetails(1);
+                }
+                continue;
+            }
+            if ($state->view() !== 'list') {
+                continue;
+            }
+
+            if ($key === "\033[A" || $key === 'k') {
+                $state->move(-1);
+            } elseif ($key === "\033[B" || $key === 'j') {
+                $state->move(1);
+            } elseif ($key === "\r" || $key === "\n") {
+                $state->openDetails();
+            } elseif ($key === '/') {
+                $inputMode = 'search';
+                $inputBuffer = $state->search();
+            } elseif ($key === 'f') {
+                $inputMode = 'filter';
+                $inputBuffer = $state->filterExpression();
+            } elseif ($key === 'c') {
+                $state->clearAll();
+            }
+        }
+    } finally {
+        $terminal->leave();
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, '[ERROR] ' . $e->getMessage() . PHP_EOL);
+    exit(1);
+}

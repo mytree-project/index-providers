@@ -38,7 +38,8 @@
     }
   },
   "bin": [
-    "bin/mytree-index"
+    "bin/mytree-index",
+    "bin/mytree-index-view"
   ],
   "scripts": {
     "test": "phpunit"
