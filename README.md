@@ -6,7 +6,7 @@ Standalone PHP package for acquiring genealogical index data from:
 - **Metryki-Wołyń** — HTML search results acquired parish-by-parish and year-by-year,
 - **BASIA** — bounded, low-rate search through the public advanced-search form plus indexed-catalog discovery.
 
-The package is framework-independent and does not depend on Laravel. Providers accept a standard PSR-18 HTTP client, so MyTree or another host application can inject its own implementation without adapting to a MyTree-specific HTTP interface. The standalone CLI uses a default Guzzle 7 composition.
+Providers accept a standard PSR-18 HTTP client, so MyTree or another host application can inject its own implementation without adapting to a MyTree-specific HTTP interface. The standalone CLI uses a default Guzzle 7 composition.
 
 ## Requirements
 
@@ -14,7 +14,6 @@ The package is framework-independent and does not depend on Laravel. Providers a
 - Composer 2
 - PHP DOM extension (`ext-dom`)
 - dependencies from `composer.json` (`guzzlehttp/guzzle` and PSR-18/PSR-7/PSR-17 contracts)
-- no Laravel dependency
 
 Install dependencies before using the library or CLI:
 
