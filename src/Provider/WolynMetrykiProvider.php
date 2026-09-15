@@ -154,10 +154,11 @@ final class WolynMetrykiProvider
             $yearRecords = 0;
             $fingerprintOccurrences = [];
             foreach ($tables as $table) {
-                $recordType = $this->canonicalType($table['title']);
-                if ($recordType === null) {
-                    $this->progress->warning('Unknown Metryki-Wołyń section: ' . $table['title']);
-                    continue;
+                $recordType = $this->recordType($table['title']);
+                if (str_starts_with($recordType, 'provider:wolyn-metryki:')) {
+                    $this->progress->warning(
+                        "Unknown Metryki-Wołyń section '{$table['title']}' preserved as opaque record type $recordType.",
+                    );
                 }
                 foreach ($table['rows'] as $rowIndex => $row) {
                     if ($row['cells'] === []) {
@@ -220,16 +221,28 @@ final class WolynMetrykiProvider
         string $rawSha256,
         string $retrievedAt,
     ): ExternalIndexRecord {
+        $knownType = !str_starts_with($recordType, 'provider:wolyn-metryki:');
         $fields = match ($recordType) {
             'death' => $this->mapDeath($cells, $hrefs),
             'birth' => $this->mapBirth($cells, $hrefs),
             'marriage' => $this->mapMarriage($cells, $hrefs),
             'parish_census' => $this->mapParishCensus($cells, $hrefs),
-            default => throw new RuntimeException('Unsupported record type: ' . $recordType),
+            default => [
+                'provider_table' => [
+                    'section_title_raw' => $title,
+                    'headers_raw' => $headers,
+                    'cells_raw' => $cells,
+                    'hrefs' => $hrefs,
+                ],
+            ],
         };
 
-        $yearRaw = $recordType === 'parish_census' ? ($cells[8] ?? '') : ($cells[2] ?? '');
-        $parishRaw = $recordType === 'parish_census' ? ($cells[6] ?? '') : ($cells[3] ?? '');
+        $yearRaw = $knownType
+            ? ($recordType === 'parish_census' ? ($cells[8] ?? '') : ($cells[2] ?? ''))
+            : '';
+        $parishRaw = $knownType
+            ? ($recordType === 'parish_census' ? ($cells[6] ?? '') : ($cells[3] ?? ''))
+            : '';
         $year = preg_match('~^\d{4}$~', $yearRaw) ? (int) $yearRaw : null;
         if ($year !== null && $year !== $requestedYear) {
             $this->progress->warning("Metryki-Wołyń returned year $year for request $requestedYear.");
@@ -435,6 +448,19 @@ final class WolynMetrykiProvider
         }
 
         return $this->http->sendRequest($request);
+    }
+
+    private function recordType(string $title): string
+    {
+        $canonical = $this->canonicalType($title);
+        if ($canonical !== null) {
+            return $canonical;
+        }
+
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $title));
+        $token = substr(hash('sha256', $normalized), 0, 12);
+
+        return 'provider:wolyn-metryki:' . $token;
     }
 
     private function canonicalType(string $title): ?string
