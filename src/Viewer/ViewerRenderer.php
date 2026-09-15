@@ -184,12 +184,14 @@ final class ViewerRenderer
         return array_map(static fn (string $column): string => $map[$column], $columns);
     }
 
-    /** @return list<string> */
+    /** @param array<string,mixed> $data @return list<string> */
     private function section(string $title, mixed $data, int $width): array
     {
         $lines = ['', $title];
         foreach ($this->formatValue($data) as $line) {
-            $lines[] = $this->fit($line, $width);
+            foreach ($this->wrap($line, $width) as $wrapped) {
+                $lines[] = $wrapped;
+            }
         }
         return $lines;
     }
@@ -279,6 +281,34 @@ final class ViewerRenderer
     private function fit(string $value, int $width): string
     {
         return $this->truncate($value, $width);
+    }
+
+    /** @return list<string> */
+    private function wrap(string $value, int $width): array
+    {
+        if ($width <= 0 || $this->length($value) <= $width) {
+            return [$value];
+        }
+
+        $characters = preg_split('//u', $value, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($characters)) {
+            return str_split($value, $width);
+        }
+
+        $lines = [];
+        $current = '';
+        foreach ($characters as $character) {
+            if ($current !== '' && $this->length($current . $character) > $width) {
+                $lines[] = $current;
+                $current = '';
+            }
+            $current .= $character;
+        }
+        if ($current !== '') {
+            $lines[] = $current;
+        }
+
+        return $lines;
     }
 
     private function truncate(string $value, int $width): string
