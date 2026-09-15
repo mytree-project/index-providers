@@ -44,6 +44,43 @@ final class WolynMetrykiProviderTest extends TestCase
         self::assertFalse($birth['representation']['original_document_wording_asserted'] ?? true);
     }
 
+    public function testUnknownSectionIsPreservedAsProviderQualifiedOpaqueRecord(): void
+    {
+        $html = $this->fixture('wolyn_unknown_section.html');
+        $http = new FakeHttpClient(fn (RequestInterface $request): Response => new Response(200, [], $html));
+        $dir = $this->tmp . '/wolyn-unknown';
+        $writer = new JsonlWriter($dir . '/records.jsonl', false);
+        $provider = new WolynMetrykiProvider(
+            $http,
+            new JsonCheckpointStore($dir . '/state.json'),
+            new RawResponseStore($dir . '/raw'),
+            new RateLimiter(0),
+        );
+
+        $stats = $provider->acquire('Szumsk', 1835, 1835, $writer);
+        $writer->close();
+
+        self::assertSame(1, $stats->records);
+        self::assertSame(1, $http->calls);
+
+        $lines = file($dir . '/records.jsonl', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        self::assertCount(1, $lines);
+        $record = json_decode($lines[0], true, flags: JSON_THROW_ON_ERROR);
+        $expectedType = 'provider:wolyn-metryki:' . substr(hash('sha256', 'Potwierdzenia'), 0, 12);
+
+        self::assertSame($expectedType, $record['record_type'] ?? null);
+        self::assertNull($record['year'] ?? null, 'Unknown provider table columns must not be guessed as event-year semantics.');
+        self::assertSame('Szumsk', $record['parish'] ?? null);
+        self::assertSame('Potwierdzenia', $record['raw']['section_title'] ?? null);
+        self::assertSame(['Kolumna A', 'Kolumna B', 'Odnośnik'], $record['raw']['headers'] ?? null);
+        self::assertSame(['wartość źródłowa', '1835?', 'skan 7'], $record['raw']['cells'] ?? null);
+        self::assertSame([[], [], ['https://example.test/unknown-scan']], $record['raw']['hrefs'] ?? null);
+        self::assertSame('Potwierdzenia', $record['fields']['provider_table']['section_title_raw'] ?? null);
+        self::assertSame(1835, $record['provenance']['requested_year'] ?? null);
+        self::assertSame('indexer_rendering', $record['representation']['kind'] ?? null);
+        self::assertFalse($record['representation']['original_document_wording_asserted'] ?? true);
+    }
+
     /** @return array<string,mixed> */
     private function birthRecord(string $path): array
     {

@@ -1,10 +1,10 @@
-# Geneteka — zapytania, dostępność i granice odpowiedzialności
+# Geneteka — queries, availability, and responsibility boundaries
 
-## Cel
+## Purpose
 
-`GenetekaProvider` ma wiernie odwzorowywać możliwości konkretnego providera, a nie planować badania MyTree.
+`GenetekaProvider` faithfully models the capabilities of the Geneteka provider. It does not plan MyTree research.
 
-Warstwa biblioteki odpowiada za:
+The library layer is responsible for:
 
 ```text
 provider form/query
@@ -14,19 +14,19 @@ provider form/query
 → ExternalIndexRecord
 ```
 
-Warstwa wyższa (np. Laravel/MyTree) może później odpowiadać za:
+A higher layer such as Laravel/MyTree may later be responsible for:
 
 ```text
 availability
-→ podział pracy na przedziały
-→ wybór providerów
-→ kolejność zapytań
-→ budżet/strategię akwizycji
+→ partition work into ranges
+→ choose providers
+→ order queries
+→ acquisition budget/strategy
 ```
 
-## Jedno zapytanie = jeden RecordType
+## One query equals one RecordType
 
-Geneteka prezentuje osobne stany formularza dla:
+Geneteka exposes separate form states for:
 
 ```text
 birth
@@ -34,7 +34,7 @@ marriage
 death
 ```
 
-Dlatego `GenetekaAcquisition` reprezentuje dokładnie jeden `RecordType`.
+`GenetekaAcquisition` therefore represents exactly one `RecordType`.
 
 ```php
 $provider
@@ -46,11 +46,13 @@ $provider
     ->acquire($writer);
 ```
 
+`banns`, `other`, and `parish_census` are not accepted Geneteka query types and are rejected before network I/O.
+
 ## Fluent API
 
-Builder jest niemutowalny: każda metoda zwraca nową konfigurację.
+The builder is immutable: every configuration method returns a new query object.
 
-Zweryfikowane skróty:
+Verified convenience methods map to provider form fields as follows:
 
 ```text
 person()          → search_lastname / search_name
@@ -62,9 +64,9 @@ exact()           → exac=1
 excludeParents()  → parents=1
 ```
 
-Nie należy zgadywać nazw parametrów niezbadanych opcji formularza. Do ich stopniowego dodawania służy `formParameter()`, a po potwierdzeniu semantyki można dodać typowaną metodę fluent.
+Do not guess the names or semantics of unverified provider form options. `formParameter()` is the controlled escape hatch for adding such fields incrementally; after their semantics are confirmed, a typed fluent method may be introduced.
 
-Parametry transportowe kontrolowane przez provider są zastrzeżone:
+Transport parameters controlled by the provider are reserved:
 
 ```text
 bdm
@@ -74,25 +76,25 @@ length
 start
 ```
 
-## Cache i checkpointy
+## Cache and checkpoints
 
-Fingerprint zapytania zależy od:
+A query fingerprint depends on:
 
 ```text
 region
 provider parish id (rid)
 record type
-wszystkie parametry formularza
+all configured provider form parameters
 page size
 ```
 
-Dzięki temu dwa różne zapytania nie współdzielą checkpointów ani stron raw cache.
+Different queries therefore do not accidentally share raw pages or completion checkpoints.
 
-`recordsFiltered` jest używane do obliczenia liczby stron, gdy API je zwraca; `recordsTotal` pozostaje fallbackiem.
+When returned by the API, `recordsFiltered` is used to calculate result-page count; `recordsTotal` remains a fallback.
 
-## Dostępność
+## Availability discovery
 
-Geneteka może publikować nieciągłe zakresy, np.:
+Geneteka may publish discontinuous coverage, for example:
 
 ```text
 1645
@@ -102,39 +104,39 @@ Geneteka może publikować nieciągłe zakresy, np.:
 1868-1907
 ```
 
-Nie należy spłaszczać ich do `1645-1907`, bo utracilibyśmy informację o lukach.
+These ranges must not be flattened to `1645-1907`, because that would erase the published gaps.
 
-Provider odczytuje te metadane z HTML publicznego interfejsu Geneteki. Nie zakłada istnienia osobnego, stabilnego endpointu API dla coverage.
+The provider reads availability metadata from the public Geneteka HTML interface. It does not assume a separate stable coverage API.
 
-`discoverAvailability()` zwraca `GenetekaRecordAvailability[]` z:
+`discoverAvailability()` returns `GenetekaRecordAvailability[]` containing:
 
 ```text
 RecordType
-providerParishId (rid właściwy dla typu)
+providerParishId (the rid appropriate for that type)
 YearRange[]
 sourceUrl
 ```
 
-Te dane są metadanymi providera. Nie są same w sobie planem akwizycji.
+This is provider metadata, not an acquisition plan.
 
-## RID per typ
+## RID may differ by record type
 
-Linki zakładek Geneteki mogą używać różnych `rid` dla urodzeń, małżeństw i zgonów tej samej logicznej parafii. Z tego powodu wyższa warstwa nie powinna zakładać:
+Geneteka's Birth/Marriage/Death tabs may use different `rid` values for the same logical parish. A higher layer must therefore not assume:
 
 ```text
 one parish = one rid for all record types
 ```
 
-Provider discovery zachowuje identyfikatory osobno per `RecordType`.
+Availability discovery preserves identifiers independently for each `RecordType`.
 
-## Przyszła unifikacja
+## Higher-level unification
 
-To repozytorium nie wprowadza wspólnego, generycznego Acquisition Managera. Provider-specific fluent API może pokrywać pełną powierzchnię formularza danego serwisu.
+This repository does not introduce a generic Acquisition Manager. Provider-specific fluent APIs may expose the verified surface of each provider.
 
-Dopiero wyższa warstwa może mapować wspólny zamiar badawczy, np.:
+A higher orchestration layer may later translate a shared research intention such as:
 
 ```text
-find birth record of person X in interval Y
+find the birth record of person X in interval Y
 ```
 
-na konkretne parametry Geneteki, Metryki-Wołyń lub kolejnych providerów.
+into concrete Geneteka, Metryki-Wołyń, BASIA, or future-provider operations.

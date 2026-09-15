@@ -1,32 +1,31 @@
 # MyTree Index Providers
 
-Samodzielny pakiet PHP do pobierania indeksów genealogicznych z:
+Standalone PHP package for acquiring genealogical index data from:
 
-- **Geneteka** — JSON z wewnętrznego endpointu `getAct.php`, stronicowanie,
-- **Metryki-Wołyń** — HTML wyszukiwarki, pobieranie parafii rok po roku,
-- **BASIA** — ograniczone (bounded), niskoczęstotliwościowe wyszukiwanie przez publiczny formularz rozszerzony oraz discovery katalogu zindeksowanych jednostek.
+- **Geneteka** — paginated JSON from the internal `getAct.php` endpoint,
+- **Metryki-Wołyń** — HTML search results acquired parish-by-parish and year-by-year,
+- **BASIA** — bounded, low-rate search through the public advanced-search form plus indexed-catalog discovery.
 
-Pakiet nie zależy od Laravela. Providerzy przyjmują standardowy klient HTTP PSR-18, więc MyTree lub inna aplikacja może wstrzyknąć własną implementację bez adaptera do niestandardowego interfejsu MyTree. Standalone CLI używa domyślnej kompozycji opartej na Guzzle 7.
+Providers accept a standard PSR-18 HTTP client, so MyTree or another host application can inject its own implementation without adapting to a MyTree-specific HTTP interface. The standalone CLI uses a default Guzzle 7 composition.
 
-## Wymagania
+## Requirements
 
 - PHP 8.2+
 - Composer 2
-- rozszerzenie PHP DOM (`ext-dom`)
-- zależności z `composer.json` (`guzzlehttp/guzzle` oraz kontrakty PSR-18/PSR-7/PSR-17)
-- brak zależności od Laravel
+- PHP DOM extension (`ext-dom`)
+- dependencies from `composer.json` (`guzzlehttp/guzzle` and PSR-18/PSR-7/PSR-17 contracts)
 
-Przed użyciem biblioteki lub CLI zainstaluj zależności:
+Install dependencies before using the library or CLI:
 
 ```bash
 composer install
 ```
 
-## HTTP i integracja
+## HTTP and integration boundary
 
-Publiczną granicą klienta HTTP jest `Psr\Http\Client\ClientInterface`. Requesty i responses używają PSR-7, a provider może przyjąć również własny `Psr\Http\Message\RequestFactoryInterface`.
+The public HTTP-client boundary is `Psr\Http\Client\ClientInterface`. Requests and responses use PSR-7, and providers may also receive a custom `Psr\Http\Message\RequestFactoryInterface` and, when a request body is needed, a `Psr\Http\Message\StreamFactoryInterface`.
 
-Domyślny klient standalone można utworzyć przez:
+The default standalone client can be created with:
 
 ```php
 use MyTree\IndexProviders\Http\DefaultHttpClientFactory;
@@ -37,9 +36,9 @@ $http = DefaultHttpClientFactory::create(
 );
 ```
 
-`NativeHttpClient` pozostaje tymczasowo jako deprecated compatibility shim, ale sam implementuje już PSR-18 i deleguje do domyślnego stosu Guzzle.
+`NativeHttpClient` remains temporarily as a deprecated compatibility shim. It implements PSR-18 and delegates to the default Guzzle-based stack.
 
-Aplikacja hostująca może zamiast tego wstrzyknąć dowolny kompatybilny klient PSR-18 oraz, opcjonalnie, własną fabrykę PSR-17:
+A host application may inject any compatible PSR-18 client and, optionally, its own PSR-17 factories:
 
 ```php
 $provider = new GenetekaProvider(
@@ -50,15 +49,15 @@ $provider = new GenetekaProvider(
 );
 ```
 
-Domyślna kompozycja zachowuje dotychczasową politykę retry dla błędów transportowych, `429` i `5xx`, a redirecty dla `GET`/`HEAD` są obsługiwane jawnie. Retry domyślnie nie obejmuje `POST`; provider wykonujący bezpieczny read-only POST musi włączyć go świadomie. CLI BASIA robi to jawnie, ponieważ wyszukiwanie BASIA jest odczytowym `POST` z odtwarzalnym body.
+The default composition retries transport failures, HTTP `429`, and `5xx` responses. Redirects for `GET`/`HEAD` are handled explicitly. Retry does not include `POST` by default; a provider performing a replayable read-only POST must opt in deliberately. The BASIA CLI does so because BASIA search is a read-only POST with a reproducible body.
 
-Rate limiting pozostaje osobną odpowiedzialnością providera. Dla BASIA domyślny interwał CLI wynosi 5000 ms, a timeout 200 s; Geneteka i Metryki-Wołyń zachowują dotychczasowe domyślne 2000 ms i 60 s.
+Rate limiting remains a provider responsibility. BASIA defaults to a minimum interval of 5000 ms and a 200-second timeout; Geneteka and Metryki-Wołyń keep the existing defaults of 2000 ms and 60 seconds.
 
-Więcej: [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md).
+See [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md) for host-application composition.
 
-## Szybki start
+## Quick start
 
-### Geneteka — Imbramowice, małopolskie
+### Geneteka — Imbramowice, Małopolskie
 
 ```bash
 php bin/mytree-index geneteka \
@@ -71,17 +70,17 @@ php bin/mytree-index geneteka \
   --output=var/imbramowice
 ```
 
-Typ wejściowy jest kanonicznym `RecordType` MyTree, niezależnym od oznaczeń konkretnego portalu:
+The input type is MyTree's canonical `RecordType`, independent of provider-specific transport codes:
 
-- `birth` — urodzenia,
-- `marriage` — śluby,
-- `death` — zgony.
+- `birth`,
+- `marriage`,
+- `death`.
 
-Jedna operacja Geneteki odpowiada jednemu stanowi formularza i jednemu typowi rekordu. Agregowanie kilku typów, dzielenie pracy na przedziały i planowanie kolejnych zapytań pozostaje odpowiedzialnością warstwy wyższej.
+One Geneteka acquisition represents one provider form state and one record type. Combining several record types, partitioning work into intervals, and scheduling subsequent queries belong to a higher orchestration layer.
 
-### Fluent API Geneteki
+### Geneteka fluent API
 
-Provider nie przyjmuje rosnącej listy argumentów w `acquire(...)`. Każde zapytanie buduje się jako niemutowalną konfigurację:
+A query is built as an immutable configuration rather than by extending the `acquire(...)` argument list:
 
 ```php
 $stats = $provider
@@ -95,17 +94,17 @@ $stats = $provider
     ->acquire($writer);
 ```
 
-Zweryfikowane pola formularza mają wygodne metody (`person`, `secondPerson`, `years`, `exact`, `excludeParents`). Dla pól specyficznych dla Geneteki, które nie mają jeszcze dedykowanej metody, można użyć kontrolowanego escape hatch:
+Verified form fields have typed convenience methods such as `person`, `secondPerson`, `years`, `exact`, and `excludeParents`. Provider-specific fields that do not yet have a dedicated method can be added through the controlled escape hatch:
 
 ```php
-$query = $query->formParameter('nazwa_pola_geneteki', 'wartość');
+$query = $query->formParameter('provider_field_name', 'value');
 ```
 
-Parametry transportowe `bdm`, `w`, `rid`, `length` i `start` są zastrzeżone i nie mogą zostać nadpisane przez `formParameter()`.
+Transport parameters `bdm`, `w`, `rid`, `length`, and `start` are reserved and cannot be overridden through `formParameter()`.
 
-### Dostępność lat i identyfikatory per typ
+### Geneteka availability and per-type identifiers
 
-Interfejs Geneteki publikuje dla wybranej parafii zakresy lat, które mogą być nieciągłe, a linki Urodzenia/Małżeństwa/Zgony mogą prowadzić do różnych wartości `rid`. Provider udostępnia te informacje osobno od samej akwizycji:
+The Geneteka UI publishes year coverage that may be discontinuous, and the Birth/Marriage/Death links for one logical parish may use different `rid` values. The provider exposes this metadata separately from acquisition:
 
 ```php
 $availability = $provider->discoverAvailability(
@@ -115,18 +114,20 @@ $availability = $provider->discoverAvailability(
 );
 ```
 
-Każdy `GenetekaRecordAvailability` zawiera `recordType`, właściwy dla niego `providerParishId` oraz listę `YearRange[]`. Biblioteka nie wykorzystuje tych zakresów do automatycznego planowania pobierania — może to zrobić późniejszy Acquisition Manager / warstwa Laravelowa.
+Each `GenetekaRecordAvailability` contains its `recordType`, the corresponding `providerParishId`, and `YearRange[]`. The package does not automatically turn those ranges into an acquisition plan; a later Acquisition Manager or Laravel layer may do so.
 
-CLI diagnostyczne:
+Diagnostic CLI:
 
 ```bash
 php bin/mytree-index geneteka --availability \
   --region=10pl --parish-id=4257 --type=birth --format=json
 ```
 
+See [docs/GENETEKA_ACQUISITION.md](docs/GENETEKA_ACQUISITION.md).
+
 ### BASIA — bounded search
 
-BASIA nie jest obsługiwana jako crawler całej bazy. Provider wykonuje jedno świadomie ograniczone wyszukiwanie odpowiadające stanowi publicznego formularza rozszerzonego:
+BASIA is intentionally not supported as a crawler or full-database mirror. One provider operation represents one deliberately bounded state of the public advanced-search form:
 
 ```bash
 php bin/mytree-index basia \
@@ -138,7 +139,7 @@ php bin/mytree-index basia \
   --output=var/basia-kowalski
 ```
 
-Wymagany jest co najmniej jeden z filtrów `--surname`, `--name` lub `--place`. Obsługiwane kanoniczne typy to:
+At least one of `--surname`, `--name`, or `--place` is required. Supported canonical types are:
 
 - `birth`,
 - `marriage`,
@@ -146,9 +147,9 @@ Wymagany jest co najmniej jeden z filtrów `--surname`, `--name` lub `--place`. 
 - `banns`,
 - `other`.
 
-`banns` jest osobnym typem, a `other` oznacza wyłącznie kategorię „inne” deklarowaną przez providera. Nieznana przyszła kategoria BASIA jest zachowywana jako `provider:basia:<token>` zamiast automatycznie stawać się `other`.
+`banns` is distinct from `marriage`. `other` means only the provider's explicit other/uncategorized category. A future BASIA category without an accepted canonical mapping is preserved as `provider:basia:<token>` rather than silently becoming `other`.
 
-Dodatkowe filtry CLI obejmują `--place`, `--distance-km`, `--similarity`, `--sex`, `--relation` i `--unit-type`. Kody formularza BASIA nie są częścią publicznego API — caller używa wyłącznie kanonicznych wartości.
+Additional CLI filters include `--place`, `--distance-km`, `--similarity`, `--sex`, `--relation`, and `--unit-type`. BASIA form codes remain private to the provider adapter; callers use canonical values only.
 
 Fluent API:
 
@@ -163,15 +164,15 @@ $stats = $basia
     ->acquire($writer);
 ```
 
-BASIA bywa wolna dla szerokich zapytań. HTTP `200` nie jest automatycznie uznawane za sukces: parser wymaga markera ukończonego wyszukiwania. Ucięta odpowiedź nie trafia do cache jako poprawna i nie tworzy checkpointu; należy wtedy zawęzić zapytanie i wykonać je ponownie. Pusty, ale kompletny wynik jest prawidłowym sukcesem.
+BASIA can be slow for broad queries. HTTP `200` is not automatically treated as a successful search response: the parser requires the upstream search-complete marker. A response without that marker is not promoted to the reusable raw cache and does not create a completion checkpoint. Narrow the query deliberately and retry. A complete search with zero results is a valid success.
 
-Link do skanu zwrócony przez BASIA jest zachowywany jako locator / lead do dalszej akwizycji. Ten provider nie pobiera skanów.
+A scan URL returned by BASIA is preserved as a locator/acquisition lead. This Index Provider does not download the scan.
 
-Szczegóły: [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
+See [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
 
-### BASIA — katalog zindeksowanych jednostek
+### BASIA — indexed catalog
 
-Katalog BASIA (`content-all.php?lang=pl`) opisuje nie tylko parafie. Jedna miejscowość może mieć równolegle parafię katolicką, ewangelicką, urząd stanu cywilnego oraz inne jednostki. Dlatego ten tryb używa nowego addytywnego kontraktu `IndexCatalogUnit` zamiast `AvailableParish`.
+The BASIA indexed-content catalog (`content-all.php?lang=pl`) is broader than a parish list. One locality may expose, for example, a Catholic parish, a Protestant parish, a civil registry office, and other units at the same time. Catalog discovery therefore uses the additive `IndexCatalogUnit` contract instead of `AvailableParish`.
 
 CLI:
 
@@ -188,7 +189,7 @@ $units = $basia->listCatalogUnits();
 $units = $basia->listCatalogUnits(refresh: true);
 ```
 
-`BasiaProvider` implementuje opcjonalny `IndexCatalogDiscoveryInterface`. Każda jednostka używa schematu `mytree.index-catalog-unit.v1` i rozdziela `locality` od records-holding unit. Początkowe mapowania to:
+`BasiaProvider` implements the optional `IndexCatalogDiscoveryInterface`. Each unit serializes as `mytree.index-catalog-unit.v1` and keeps locality/place separate from the indexed records-holding unit. Initial mappings are:
 
 ```text
 Parafia katolicka       -> parish / roman_catholic
@@ -197,11 +198,13 @@ Urząd Stanu Cywilnego   -> civil_registry
 provider-declared other -> other
 ```
 
-Nieznany przyszły typ jednostki pozostaje `provider:basia:<token>`, a wpis bez etykiety jednostki jest zachowany jako `provider:basia:unlabeled`. Nie powstają fikcyjne parafie.
+The Polish labels above are source values published by BASIA and are intentionally preserved. An unknown future unit type remains `provider:basia:<token>`. An entry with no unit label is preserved as `provider:basia:unlabeled`. The provider does not manufacture parish semantics for non-parish units.
 
-Dostępność typu aktu przechowuje listę `YearRange`, więc zakresy nieciągłe pozostają nieciągłe. Katalog zachowuje także surowe etykiety, powiat, lokalny total wpisów, indeksujących oraz provenance surowej odpowiedzi.
+Availability stores `YearRange[]` per record type so gaps remain explicit. The catalog also preserves raw labels, county, locality-wide entry totals, indexers, and raw-response provenance.
 
-### Metryki-Wołyń — Szumsk
+Catalog cache validation is structural: every parsed locality must contain the expected BASIA locality-completion metadata (`Razem wpisów` and `Indeksujący`) and parsing must succeed before the response is promoted to reusable cache. BASIA does not expose a known page-level completion marker analogous to bounded search's `Czas wyszukiwania`, so the package does not claim to prove global completeness of an otherwise structurally valid provider snapshot.
+
+## Metryki-Wołyń — Szumsk
 
 ```bash
 php bin/mytree-index wolyn \
@@ -211,28 +214,30 @@ php bin/mytree-index wolyn \
   --output=var/szumsk
 ```
 
-Metryki-Wołyń jest pobierany **rok po roku**. Jedna odpowiedź może zawierać sekcje:
+Metryki-Wołyń acquisition proceeds **year by year**. Known sections map to:
 
 - `birth`,
 - `marriage`,
 - `death`,
 - `parish_census`.
 
-## Discovery providerów
+A future/unrecognized section is not discarded. Each row is emitted with a deterministic provider-qualified `record_type` such as `provider:wolyn-metryki:<token>`, while the exact section title, headers, cells, cell HTML, links, and request provenance are preserved. The provider does not guess column semantics or an event year for an unknown section.
 
-Pakiet ma dwa jawnie rozdzielone kontrakty discovery.
+## Discovery capabilities
+
+The package exposes two deliberately separate discovery contracts.
 
 ### Legacy parish discovery
 
-Geneteka i Metryki-Wołyń zachowują `AvailableParish` / `mytree.available-parish.v1` oraz `--list-parishes`. Nie zmieniamy ich zwrotnego typu tylko dlatego, że istnieje bardziej ogólny katalog.
+Geneteka and Metryki-Wołyń retain `AvailableParish` / `mytree.available-parish.v1` and the `--list-parishes` CLI mode. Their public return type is not changed merely because a more general catalog contract now exists.
 
-#### Geneteka — jeden region
+#### Geneteka — one region
 
 ```bash
 php bin/mytree-index geneteka --list-parishes --region=06mp
 ```
 
-Dla Geneteki `provider_parish_id` jest wartością `rid`, np.:
+For Geneteka, `provider_parish_id` is the provider `rid`, for example:
 
 ```text
 REGION  ID    PARISH
@@ -240,15 +245,15 @@ REGION  ID    PARISH
 06mp    4812  Imbramowice
 ```
 
-Lista jest pobierana z aktualnego formularza wyszukiwarki Geneteki. Jeżeli struktura formularza ulegnie zmianie, provider ma dodatkowy fallback wykorzystujący pole `parishes` odpowiedzi API `getAct.php`.
+The list is read from the current Geneteka search form. If the form structure changes, the provider has a fallback using the `parishes` field returned by `getAct.php`.
 
-Możliwe jest również zebranie wszystkich regionów:
+All regions can also be discovered:
 
 ```bash
 php bin/mytree-index geneteka --list-parishes --all-regions
 ```
 
-To wykonuje wiele żądań (po jednym na region), dlatego nadal obowiązuje `--delay-ms`. Do zwykłego użycia lepiej preferować listę dla konkretnego regionu.
+This performs several requests, one per region, so `--delay-ms` still applies. Prefer discovery for a specific region when that is sufficient.
 
 #### Metryki-Wołyń
 
@@ -256,14 +261,9 @@ To wykonuje wiele żądań (po jednym na region), dlatego nadal obowiązuje `--d
 php bin/mytree-index wolyn --list-parishes
 ```
 
-Provider korzysta ze strony **Zawartość** portalu, więc poza nazwą parafii zachowuje także deklarowane zakresy wpisów i pełnych indeksów dla:
+The provider uses the portal's `Zawartość` page. In addition to the parish name it retains the portal's published ranges for entries and complete indexes covering births, marriages, deaths, and parish censuses.
 
-- urodzeń,
-- ślubów,
-- zgonów,
-- spisów parafian.
-
-Przykładowy widok tabelaryczny:
+Example table view:
 
 ```text
 PARISH  BIRTHS     MARRIAGES  DEATHS     CENSUS
@@ -271,11 +271,13 @@ PARISH  BIRTHS     MARRIAGES  DEATHS     CENSUS
 Szumsk  1731-1926  1739-1943  1741-1939  1857
 ```
 
+See [docs/PARISH_DISCOVERY.md](docs/PARISH_DISCOVERY.md).
+
 ### Generalized catalog discovery
 
-Nowy opcjonalny kontrakt `IndexCatalogDiscoveryInterface` zwraca `IndexCatalogUnit[]`. W P1 implementuje go BASIA. `AvailableParish` nie jest usuwany ani zmieniany.
+The optional `IndexCatalogDiscoveryInterface` returns `IndexCatalogUnit[]`. BASIA implements this capability in P1. `AvailableParish` is neither removed nor changed.
 
-Przykładowy wynik JSON BASIA:
+Representative BASIA result:
 
 ```json
 {
@@ -310,9 +312,9 @@ Przykładowy wynik JSON BASIA:
 }
 ```
 
-### Format wyniku discovery
+## Discovery output formats and cache
 
-Domyślnie wynik jest tabelą. Można uzyskać JSON lub JSONL:
+Discovery output defaults to a table. JSON and JSONL are also supported:
 
 ```bash
 php bin/mytree-index geneteka --list-parishes --region=06mp --format=json
@@ -320,14 +322,14 @@ php bin/mytree-index wolyn --list-parishes --format=jsonl
 php bin/mytree-index basia --list-catalog --format=json
 ```
 
-Można też zapisać wynik do pliku:
+Output can be saved to a file:
 
 ```bash
 php bin/mytree-index wolyn --list-parishes --format=json --save=parishes-wolyn.json
 php bin/mytree-index basia --list-catalog --format=json --save=basia-catalog.json
 ```
 
-Przykładowy rekord legacy parish discovery:
+Representative legacy parish-discovery record:
 
 ```json
 {
@@ -341,60 +343,58 @@ Przykładowy rekord legacy parish discovery:
 }
 ```
 
-Dla Metryki-Wołyń `provider_parish_id` jest `null`, ponieważ wyszukiwarka identyfikuje parafię tekstową nazwą. Zakresy dostępności znajdują się w `metadata.wpisy` i `metadata.indeksy`.
+For Metryki-Wołyń, `provider_parish_id` is `null` because the search input currently identifies a parish by its textual name. Published coverage remains in `metadata.wpisy` and `metadata.indeksy`; those keys preserve provider wording.
 
-Discovery używa własnego cache surowych stron. Domyślnie jest to `var/discovery-cache`; można wskazać inne miejsce przez `--output=DIR`. Aby odświeżyć dane z portalu, użyj:
+Discovery uses a separate raw-page cache. The default directory is `var/discovery-cache`; use `--output=DIR` to select another location and `--refresh` to bypass the cached provider snapshot.
 
-```bash
---refresh
-```
-
-BASIA cache'uje kompletnie sparsowany katalog jako `raw/basia/catalog_pl.html`. Odpowiedź niekompletna lub strukturalnie błędna nie jest promowana do poprawnego cache.
+BASIA stores a successfully parsed catalog at `raw/basia/catalog_pl.html` together with metadata. Structural parse failures are not promoted to a successful reusable cache entry.
 
 ## Rate limiting
 
-Domyślnie Geneteka i Metryki-Wołyń czekają co najmniej 2000 ms między kolejnymi żądaniami sieciowymi. BASIA ma bardziej konserwatywny domyślny interwał 5000 ms:
+Geneteka and Metryki-Wołyń default to at least 2000 ms between network requests. BASIA uses a more conservative default of 5000 ms:
 
 ```bash
 --delay-ms=5000
 ```
 
-Nie zaleca się zmniejszania tych opóźnień. Narzędzie jest przeznaczone do kontrolowanego, osobistego pozyskiwania danych. Przed większym pobieraniem należy upewnić się, że sposób użycia jest zgodny z zasadami/regulaminem danego serwisu.
+Reducing these delays is discouraged. The package is intended for controlled personal research. Before larger acquisitions, verify that the intended use is consistent with the rules and policies of the upstream service.
 
-## Wznawianie
+## Resume and restart
 
-Program zapisuje checkpoint po każdej kompletnej jednostce pracy:
+The CLI checkpoints complete acquisition work units:
 
-- Geneteka — po stronie wyników,
-- Metryki-Wołyń — po roku,
-- BASIA bounded search — po kompletnym zapytaniu.
+- Geneteka — result page,
+- Metryki-Wołyń — year,
+- BASIA bounded search — complete bounded query.
 
-Ponowne uruchomienie tego samego polecenia z tym samym `--output` wznowi pracę.
+Re-running the same acquisition with the same `--output` resumes from local state.
 
-Dla Geneteki cache i checkpointy są rozdzielane według deterministycznego fingerprintu całej konfiguracji zapytania (region, `rid`, typ rekordu, parametry formularza i rozmiar strony). BASIA bounded search używa analogicznego fingerprintu kanonicznej konfiguracji wyszukiwania; provider zapisuje cache dopiero po potwierdzeniu kompletności odpowiedzi.
+Geneteka cache/checkpoints are partitioned by a deterministic fingerprint of the full query configuration: region, `rid`, record type, form parameters, and page size. BASIA bounded search uses an analogous fingerprint of its canonical search configuration and only caches a response after search completeness has been confirmed.
 
-BASIA catalog discovery jest pojedynczym snapshotem discovery: korzysta z raw cache i `--refresh`, ale nie tworzy checkpointu akwizycji rekordów osób.
+BASIA catalog discovery is a separate provider snapshot. It uses raw cache plus `--refresh` and does not create a person-record acquisition checkpoint.
 
-Surowe odpowiedzi są zapisywane w `raw/`. Jeżeli odpowiedź została pobrana, ale proces przerwał się przed checkpointem, przy wznowieniu program użyje lokalnego cache zamiast ponownie pytać serwis, o ile odpowiedź przeszła walidację kompletności.
+Raw responses are retained under `raw/`. If an acquisition response was retrieved but processing stopped before checkpoint completion, a later run can reuse the local raw response when that provider workflow considers it reusable.
 
-`records.jsonl` deduplikuje rekordy po `provider_record_id`, dzięki czemu przerwanie w środku jednostki nie powinno tworzyć duplikatów po wznowieniu.
+`records.jsonl` deduplicates by `provider_record_id`, preventing ordinary resume from creating duplicate semantic rows.
 
-### Pełne pobranie od nowa
+### Full restart
 
 ```bash
 ... --restart
 ```
 
-`--restart` dla akwizycji rekordów:
+For record acquisition, `--restart`:
 
-- usuwa `records.jsonl`,
-- usuwa checkpointy,
-- ignoruje istniejący cache w czasie pobierania,
-- nadpisuje odpowiadające pliki raw nową odpowiedzią.
+- removes `records.jsonl`,
+- removes checkpoints,
+- bypasses existing cache during the run,
+- replaces corresponding raw responses with newly retrieved responses.
 
-Dla discovery preferowanym jawnym mechanizmem odświeżenia jest `--refresh`.
+For discovery, prefer the explicit `--refresh` mechanism.
 
-## Struktura wyjścia
+## Output layout
+
+Geneteka example:
 
 ```text
 var/imbramowice/
@@ -409,7 +409,7 @@ var/imbramowice/
         └── ...
 ```
 
-Dla Wołynia:
+Metryki-Wołyń raw responses:
 
 ```text
 raw/wolyn-metryki/
@@ -418,7 +418,7 @@ raw/wolyn-metryki/
 └── ...
 ```
 
-Dla BASIA:
+BASIA raw responses:
 
 ```text
 raw/basia/
@@ -450,11 +450,11 @@ c            clear search and filters
 q            quit
 ```
 
-The initial terminal adapter uses ANSI + `stty` and therefore targets Unix-like interactive terminals. See [docs/RESULT_VIEWER.md](docs/RESULT_VIEWER.md) for validation rules, details-view behavior, search semantics and current limitations.
+The initial terminal adapter uses ANSI + `stty` and therefore targets Unix-like interactive terminals. See [docs/RESULT_VIEWER.md](docs/RESULT_VIEWER.md) for validation rules, details-view behavior, search semantics, and current limitations.
 
-## Format `ExternalIndexRecord`
+## `ExternalIndexRecord`
 
-Każda linia JSONL akwizycji rekordów ma stabilny kontrakt:
+Every acquisition JSONL line uses the stable `mytree.external-index-record.v1` contract:
 
 ```json
 {
@@ -470,46 +470,43 @@ Każda linia JSONL akwizycji rekordów ma stabilny kontrakt:
 }
 ```
 
-Najważniejsza zasada: `fields` ułatwia dalszą pracę, ale `raw` zachowuje wartości indeksu. Narzędzie nie próbuje rozstrzygać niepewności typu `20?`, wariantów nazwiska ani semantyki tekstu w uwagach. W BASIA wartości opisowe są dodatkowo oznaczane jako `indexer_rendering`, aby nie sugerować, że są literalnym brzmieniem dokumentu źródłowego.
+`fields` provides a convenient structured projection, while `raw` retains provider values. The package does not resolve uncertain values such as `20?`, surname variants, or free-text note semantics. Provider/indexer descriptive values use `ValueRepresentation::indexerRendering(...)` so downstream code does not mistake them for guaranteed wording from the historical document.
+
+See [docs/VALUE_REPRESENTATION.md](docs/VALUE_REPRESENTATION.md).
 
 ## Provenance
 
-Każdy rekord zawiera m.in.:
+Acquisition records retain, as applicable:
 
-- URL żądania lub stabilny permalink rekordu,
-- czas pobrania,
-- ścieżkę do surowej odpowiedzi,
-- SHA-256 surowej odpowiedzi,
-- konfigurację/fingerprint zapytania właściwe dla providera,
-- indeks wiersza/strony/roku lub wyniku,
-- wersję parsera tam, gdzie ma to znaczenie dla odtwarzalności.
+- request URL or stable provider permalink,
+- retrieval time,
+- raw-response path,
+- raw-response SHA-256,
+- provider-specific query configuration/fingerprint,
+- page/year/result/row index,
+- parser version where relevant.
 
-`IndexCatalogUnit` również zachowuje URL katalogu, czas pobrania, ścieżkę/hash raw response, wersję parsera i indeks pozycji katalogowej. `catalog_unit_key` jest lokalnym, deterministycznym kluczem discovery, nie `SourceId`.
+`IndexCatalogUnit` also retains the catalog URL, retrieval time, raw-response path/hash, parser version, and catalog-item index. `catalog_unit_key` is a deterministic provider-local discovery key, not a MyTree `SourceId`.
 
-Dzięki temu późniejszy importer MyTree może zachować pochodzenie danych bez utraty granicy odpowiedzialności pomiędzy discovery, akwizycją i identyfikacją źródła.
+This allows a later MyTree importer to preserve the origin of data without collapsing the boundaries between discovery, external index acquisition, and historical source identity.
 
-## Testy
+## Tests
 
-Testy są napisane w PHPUnit. Najpierw zainstaluj zależności:
+Tests use PHPUnit and are designed to run offline.
 
 ```bash
 composer install
-```
-
-Następnie uruchom cały zestaw:
-
-```bash
 composer test
 ```
 
-Bezpośrednie uruchomienie PHPUnit:
+Direct PHPUnit invocation:
 
 ```bash
 vendor/bin/phpunit
 ```
 
-Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych. BASIA ma statyczne fixtures dla bounded search oraz osobne fixtures katalogu obejmujące wiele jednostek jednej miejscowości, nieciągłe zakresy, typy jawne/nieznane i odpowiedź niekompletną.
+Normal tests must not depend on third-party service availability. BASIA uses static fixtures for bounded search and separate catalog fixtures covering multiple units under one locality, discontinuous ranges, explicit/unknown categories, and structurally incomplete responses.
 
-## Integracja z Laravel/MyTree
+## Laravel / MyTree integration
 
-Zobacz [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md) oraz [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
+See [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md) and [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
