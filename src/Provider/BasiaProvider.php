@@ -6,10 +6,12 @@ namespace MyTree\IndexProviders\Provider;
 
 use GuzzleHttp\Psr7\HttpFactory;
 use MyTree\IndexProviders\Contracts\CheckpointStoreInterface;
+use MyTree\IndexProviders\Contracts\IndexCatalogDiscoveryInterface;
 use MyTree\IndexProviders\Contracts\ProgressReporterInterface;
 use MyTree\IndexProviders\Contracts\RecordWriterInterface;
 use MyTree\IndexProviders\Domain\AcquisitionStats;
 use MyTree\IndexProviders\Domain\ExternalIndexRecord;
+use MyTree\IndexProviders\Domain\IndexCatalogUnit;
 use MyTree\IndexProviders\Domain\RecordType;
 use MyTree\IndexProviders\Domain\ValueRepresentation;
 use MyTree\IndexProviders\Storage\RawResponseStore;
@@ -20,7 +22,7 @@ use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use RuntimeException;
 
-final class BasiaProvider
+final class BasiaProvider implements IndexCatalogDiscoveryInterface
 {
     public const DEFAULT_BASE_URL = 'https://basia.famula.pl';
     public const DEFAULT_MINIMUM_DELAY_MS = 5000;
@@ -83,6 +85,19 @@ final class BasiaProvider
     public function search(): BasiaSearch
     {
         return new BasiaSearch($this);
+    }
+
+    /** @return list<IndexCatalogUnit> */
+    public function listCatalogUnits(bool $refresh = false): array
+    {
+        return (new BasiaCatalogDiscovery(
+            $this->http,
+            $this->rawStore,
+            $this->rateLimiter,
+            $this->progress,
+            $this->requestFactory,
+            $this->baseUrl,
+        ))->listCatalogUnits($refresh);
     }
 
     /** @internal Executed by BasiaSearch::acquire(). */
