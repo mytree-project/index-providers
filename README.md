@@ -4,7 +4,7 @@ Samodzielny pakiet PHP do pobierania indeksów genealogicznych z:
 
 - **Geneteka** — JSON z wewnętrznego endpointu `getAct.php`, stronicowanie,
 - **Metryki-Wołyń** — HTML wyszukiwarki, pobieranie parafii rok po roku,
-- **BASIA** — ograniczone (bounded), niskoczęstotliwościowe wyszukiwanie przez publiczny formularz rozszerzony.
+- **BASIA** — ograniczone (bounded), niskoczęstotliwościowe wyszukiwanie przez publiczny formularz rozszerzony oraz discovery katalogu zindeksowanych jednostek.
 
 Pakiet nie zależy od Laravela. Providerzy przyjmują standardowy klient HTTP PSR-18, więc MyTree lub inna aplikacja może wstrzyknąć własną implementację bez adaptera do niestandardowego interfejsu MyTree. Standalone CLI używa domyślnej kompozycji opartej na Guzzle 7.
 
@@ -169,6 +169,38 @@ Link do skanu zwrócony przez BASIA jest zachowywany jako locator / lead do dals
 
 Szczegóły: [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
 
+### BASIA — katalog zindeksowanych jednostek
+
+Katalog BASIA (`content-all.php?lang=pl`) opisuje nie tylko parafie. Jedna miejscowość może mieć równolegle parafię katolicką, ewangelicką, urząd stanu cywilnego oraz inne jednostki. Dlatego ten tryb używa nowego addytywnego kontraktu `IndexCatalogUnit` zamiast `AvailableParish`.
+
+CLI:
+
+```bash
+php bin/mytree-index basia --list-catalog
+php bin/mytree-index basia --list-catalog --format=json
+php bin/mytree-index basia --list-catalog --format=jsonl
+```
+
+PHP API:
+
+```php
+$units = $basia->listCatalogUnits();
+$units = $basia->listCatalogUnits(refresh: true);
+```
+
+`BasiaProvider` implementuje opcjonalny `IndexCatalogDiscoveryInterface`. Każda jednostka używa schematu `mytree.index-catalog-unit.v1` i rozdziela `locality` od records-holding unit. Początkowe mapowania to:
+
+```text
+Parafia katolicka       -> parish / roman_catholic
+Parafia ewangelicka     -> parish / evangelical
+Urząd Stanu Cywilnego   -> civil_registry
+provider-declared other -> other
+```
+
+Nieznany przyszły typ jednostki pozostaje `provider:basia:<token>`, a wpis bez etykiety jednostki jest zachowany jako `provider:basia:unlabeled`. Nie powstają fikcyjne parafie.
+
+Dostępność typu aktu przechowuje listę `YearRange`, więc zakresy nieciągłe pozostają nieciągłe. Katalog zachowuje także surowe etykiety, powiat, lokalny total wpisów, indeksujących oraz provenance surowej odpowiedzi.
+
 ### Metryki-Wołyń — Szumsk
 
 ```bash
@@ -186,13 +218,15 @@ Metryki-Wołyń jest pobierany **rok po roku**. Jedna odpowiedź może zawierać
 - `death`,
 - `parish_census`.
 
-## Odkrywanie dostępnych parafii
+## Discovery providerów
 
-Pakiet udostępnia tryb discovery dla Geneteki i Metryk-Wołyń, który nie pobiera indeksów osób, tylko listę parafii dostępnych w danym portalu. Wynik ma wspólny kontrakt `mytree.available-parish.v1`, dzięki czemu może później zasilać selektor parafii w interfejsie MyTree/Laravel.
+Pakiet ma dwa jawnie rozdzielone kontrakty discovery.
 
-**BASIA nie ma w tym zakresie implementacji catalog/parish discovery.** Jest obecnie wyłącznie providerem bounded search.
+### Legacy parish discovery
 
-### Geneteka — jeden region
+Geneteka i Metryki-Wołyń zachowują `AvailableParish` / `mytree.available-parish.v1` oraz `--list-parishes`. Nie zmieniamy ich zwrotnego typu tylko dlatego, że istnieje bardziej ogólny katalog.
+
+#### Geneteka — jeden region
 
 ```bash
 php bin/mytree-index geneteka --list-parishes --region=06mp
@@ -216,7 +250,7 @@ php bin/mytree-index geneteka --list-parishes --all-regions
 
 To wykonuje wiele żądań (po jednym na region), dlatego nadal obowiązuje `--delay-ms`. Do zwykłego użycia lepiej preferować listę dla konkretnego regionu.
 
-### Metryki-Wołyń
+#### Metryki-Wołyń
 
 ```bash
 php bin/mytree-index wolyn --list-parishes
@@ -237,6 +271,45 @@ PARISH  BIRTHS     MARRIAGES  DEATHS     CENSUS
 Szumsk  1731-1926  1739-1943  1741-1939  1857
 ```
 
+### Generalized catalog discovery
+
+Nowy opcjonalny kontrakt `IndexCatalogDiscoveryInterface` zwraca `IndexCatalogUnit[]`. W P1 implementuje go BASIA. `AvailableParish` nie jest usuwany ani zmieniany.
+
+Przykładowy wynik JSON BASIA:
+
+```json
+{
+  "schema": "mytree.index-catalog-unit.v1",
+  "provider": "basia",
+  "catalog_unit_key": "basia:...",
+  "provider_unit_id": null,
+  "locality": {
+    "provider_place_id": null,
+    "name": "Blizanów",
+    "county": "kaliski",
+    "region_code": null,
+    "region_name": null
+  },
+  "unit_name": "Parafia katolicka",
+  "unit_kind": "parish",
+  "denomination": "roman_catholic",
+  "availability": [
+    {
+      "record_type": "birth",
+      "year_ranges": [
+        {"from": 1819, "to": 1819},
+        {"from": 1821, "to": 1822}
+      ],
+      "raw_type_label": "chrzty",
+      "records_count": null
+    }
+  ],
+  "raw": {},
+  "provenance": {},
+  "metadata": {}
+}
+```
+
 ### Format wyniku discovery
 
 Domyślnie wynik jest tabelą. Można uzyskać JSON lub JSONL:
@@ -244,15 +317,17 @@ Domyślnie wynik jest tabelą. Można uzyskać JSON lub JSONL:
 ```bash
 php bin/mytree-index geneteka --list-parishes --region=06mp --format=json
 php bin/mytree-index wolyn --list-parishes --format=jsonl
+php bin/mytree-index basia --list-catalog --format=json
 ```
 
 Można też zapisać wynik do pliku:
 
 ```bash
 php bin/mytree-index wolyn --list-parishes --format=json --save=parishes-wolyn.json
+php bin/mytree-index basia --list-catalog --format=json --save=basia-catalog.json
 ```
 
-Przykładowy rekord:
+Przykładowy rekord legacy parish discovery:
 
 ```json
 {
@@ -268,11 +343,13 @@ Przykładowy rekord:
 
 Dla Metryki-Wołyń `provider_parish_id` jest `null`, ponieważ wyszukiwarka identyfikuje parafię tekstową nazwą. Zakresy dostępności znajdują się w `metadata.wpisy` i `metadata.indeksy`.
 
-Discovery używa własnego cache surowych stron. Domyślnie jest to `var/discovery-cache`; można wskazać inne miejsce przez `--output=DIR`. Aby odświeżyć listę z portalu, użyj:
+Discovery używa własnego cache surowych stron. Domyślnie jest to `var/discovery-cache`; można wskazać inne miejsce przez `--output=DIR`. Aby odświeżyć dane z portalu, użyj:
 
 ```bash
 --refresh
 ```
+
+BASIA cache'uje kompletnie sparsowany katalog jako `raw/basia/catalog_pl.html`. Odpowiedź niekompletna lub strukturalnie błędna nie jest promowana do poprawnego cache.
 
 ## Rate limiting
 
@@ -290,11 +367,13 @@ Program zapisuje checkpoint po każdej kompletnej jednostce pracy:
 
 - Geneteka — po stronie wyników,
 - Metryki-Wołyń — po roku,
-- BASIA — po kompletnym bounded search.
+- BASIA bounded search — po kompletnym zapytaniu.
 
 Ponowne uruchomienie tego samego polecenia z tym samym `--output` wznowi pracę.
 
-Dla Geneteki cache i checkpointy są rozdzielane według deterministycznego fingerprintu całej konfiguracji zapytania (region, `rid`, typ rekordu, parametry formularza i rozmiar strony). BASIA używa analogicznego fingerprintu kanonicznej konfiguracji wyszukiwania; provider zapisuje cache dopiero po potwierdzeniu kompletności odpowiedzi.
+Dla Geneteki cache i checkpointy są rozdzielane według deterministycznego fingerprintu całej konfiguracji zapytania (region, `rid`, typ rekordu, parametry formularza i rozmiar strony). BASIA bounded search używa analogicznego fingerprintu kanonicznej konfiguracji wyszukiwania; provider zapisuje cache dopiero po potwierdzeniu kompletności odpowiedzi.
+
+BASIA catalog discovery jest pojedynczym snapshotem discovery: korzysta z raw cache i `--refresh`, ale nie tworzy checkpointu akwizycji rekordów osób.
 
 Surowe odpowiedzi są zapisywane w `raw/`. Jeżeli odpowiedź została pobrana, ale proces przerwał się przed checkpointem, przy wznowieniu program użyje lokalnego cache zamiast ponownie pytać serwis, o ile odpowiedź przeszła walidację kompletności.
 
@@ -306,12 +385,14 @@ Surowe odpowiedzi są zapisywane w `raw/`. Jeżeli odpowiedź została pobrana, 
 ... --restart
 ```
 
-`--restart`:
+`--restart` dla akwizycji rekordów:
 
 - usuwa `records.jsonl`,
 - usuwa checkpointy,
 - ignoruje istniejący cache w czasie pobierania,
 - nadpisuje odpowiadające pliki raw nową odpowiedzią.
+
+Dla discovery preferowanym jawnym mechanizmem odświeżenia jest `--refresh`.
 
 ## Struktura wyjścia
 
@@ -342,7 +423,9 @@ Dla BASIA:
 ```text
 raw/basia/
 ├── query_<fingerprint>.html
-└── query_<fingerprint>.html.meta.json
+├── query_<fingerprint>.html.meta.json
+├── catalog_pl.html
+└── catalog_pl.html.meta.json
 ```
 
 ## Result viewer (TUI)
@@ -371,7 +454,7 @@ The initial terminal adapter uses ANSI + `stty` and therefore targets Unix-like 
 
 ## Format `ExternalIndexRecord`
 
-Każda linia JSONL ma stabilny kontrakt:
+Każda linia JSONL akwizycji rekordów ma stabilny kontrakt:
 
 ```json
 {
@@ -401,7 +484,9 @@ Każdy rekord zawiera m.in.:
 - indeks wiersza/strony/roku lub wyniku,
 - wersję parsera tam, gdzie ma to znaczenie dla odtwarzalności.
 
-Dzięki temu późniejszy importer MyTree może utworzyć `Source`, `SourceLocator`, `Mention` i `Claim` bez utraty informacji o pochodzeniu.
+`IndexCatalogUnit` również zachowuje URL katalogu, czas pobrania, ścieżkę/hash raw response, wersję parsera i indeks pozycji katalogowej. `catalog_unit_key` jest lokalnym, deterministycznym kluczem discovery, nie `SourceId`.
+
+Dzięki temu późniejszy importer MyTree może zachować pochodzenie danych bez utraty granicy odpowiedzialności pomiędzy discovery, akwizycją i identyfikacją źródła.
 
 ## Testy
 
@@ -423,7 +508,7 @@ Bezpośrednie uruchomienie PHPUnit:
 vendor/bin/phpunit
 ```
 
-Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych. BASIA ma statyczne fixtures dla wyniku mieszanego, pustego, uciętego i strukturalnie niepoprawnego.
+Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych. BASIA ma statyczne fixtures dla bounded search oraz osobne fixtures katalogu obejmujące wiele jednostek jednej miejscowości, nieciągłe zakresy, typy jawne/nieznane i odpowiedź niekompletną.
 
 ## Integracja z Laravel/MyTree
 
