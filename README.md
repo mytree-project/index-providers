@@ -345,6 +345,30 @@ raw/basia/
 └── query_<fingerprint>.html.meta.json
 ```
 
+## Result viewer (TUI)
+
+Existing acquisition output can be inspected with the separate read-only/offline viewer:
+
+```bash
+php bin/mytree-index-view var/walenty-wisniewski-1863-1864
+```
+
+The viewer supports `mytree.index-acquisition-manifest.v1` plus `mytree.external-index-record.v1`. It reads `manifest.json` and `records.jsonl`; it does not contact providers, mutate checkpoints, or parse preserved raw HTML/JSON to reconstruct records.
+
+Main keys:
+
+```text
+↑/↓ or j/k   move selection / scroll details
+Enter        open record details
+/            incremental free-text search
+f            filters: type=<type> year=<YYYY|YYYY-YYYY>
+c            clear search and filters
+?            help
+q            quit
+```
+
+The initial terminal adapter uses ANSI + `stty` and therefore targets Unix-like interactive terminals. See [docs/RESULT_VIEWER.md](docs/RESULT_VIEWER.md) for validation rules, details-view behavior, search semantics and current limitations.
+
 ## Format `ExternalIndexRecord`
 
 Każda linia JSONL ma stabilny kontrakt:
