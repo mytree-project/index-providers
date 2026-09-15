@@ -1,12 +1,13 @@
 {
   "name": "mytree/index-providers",
-  "description": "Standalone PHP providers for acquiring genealogical indexes from Geneteka and Metryki-Wołyń, designed for integration with MyTree and Laravel.",
+  "description": "Standalone PHP providers for acquiring genealogical indexes from Geneteka, Metryki-Wołyń and BASIA, designed for integration with MyTree and Laravel.",
   "type": "library",
   "keywords": [
     "genealogy",
     "genealogical indexes",
     "geneteka",
     "metryki wolyn",
+    "basia",
     "mytree"
   ],
   "homepage": "https://github.com/mytree-project/index-providers",
@@ -24,6 +25,7 @@
   },
   "require": {
     "php": "^8.2",
+    "ext-dom": "*",
     "guzzlehttp/guzzle": "^7.9",
     "guzzlehttp/psr7": "^2.7",
     "psr/http-client": "^1.0",

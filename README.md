@@ -3,7 +3,8 @@
 Samodzielny pakiet PHP do pobierania indeksów genealogicznych z:
 
 - **Geneteka** — JSON z wewnętrznego endpointu `getAct.php`, stronicowanie,
-- **Metryki-Wołyń** — HTML wyszukiwarki, pobieranie parafii rok po roku.
+- **Metryki-Wołyń** — HTML wyszukiwarki, pobieranie parafii rok po roku,
+- **BASIA** — ograniczone (bounded), niskoczęstotliwościowe wyszukiwanie przez publiczny formularz rozszerzony.
 
 Pakiet nie zależy od Laravela. Providerzy przyjmują standardowy klient HTTP PSR-18, więc MyTree lub inna aplikacja może wstrzyknąć własną implementację bez adaptera do niestandardowego interfejsu MyTree. Standalone CLI używa domyślnej kompozycji opartej na Guzzle 7.
 
@@ -11,6 +12,7 @@ Pakiet nie zależy od Laravela. Providerzy przyjmują standardowy klient HTTP PS
 
 - PHP 8.2+
 - Composer 2
+- rozszerzenie PHP DOM (`ext-dom`)
 - zależności z `composer.json` (`guzzlehttp/guzzle` oraz kontrakty PSR-18/PSR-7/PSR-17)
 - brak zależności od Laravel
 
@@ -48,7 +50,9 @@ $provider = new GenetekaProvider(
 );
 ```
 
-Domyślna kompozycja zachowuje dotychczasową politykę retry dla błędów transportowych, `429` i `5xx`, a redirecty dla `GET`/`HEAD` są obsługiwane jawnie. Retry domyślnie nie obejmuje `POST`; provider wykonujący bezpieczny read-only POST musi włączyć go świadomie. Rate limiting pozostaje osobną odpowiedzialnością providera.
+Domyślna kompozycja zachowuje dotychczasową politykę retry dla błędów transportowych, `429` i `5xx`, a redirecty dla `GET`/`HEAD` są obsługiwane jawnie. Retry domyślnie nie obejmuje `POST`; provider wykonujący bezpieczny read-only POST musi włączyć go świadomie. CLI BASIA robi to jawnie, ponieważ wyszukiwanie BASIA jest odczytowym `POST` z odtwarzalnym body.
+
+Rate limiting pozostaje osobną odpowiedzialnością providera. Dla BASIA domyślny interwał CLI wynosi 5000 ms, a timeout 200 s; Geneteka i Metryki-Wołyń zachowują dotychczasowe domyślne 2000 ms i 60 s.
 
 Więcej: [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md).
 
@@ -120,6 +124,51 @@ php bin/mytree-index geneteka --availability \
   --region=10pl --parish-id=4257 --type=birth --format=json
 ```
 
+### BASIA — bounded search
+
+BASIA nie jest obsługiwana jako crawler całej bazy. Provider wykonuje jedno świadomie ograniczone wyszukiwanie odpowiadające stanowi publicznego formularza rozszerzonego:
+
+```bash
+php bin/mytree-index basia \
+  --surname=Kowalski \
+  --name=Jan \
+  --from=1880 \
+  --to=1900 \
+  --type=birth \
+  --output=var/basia-kowalski
+```
+
+Wymagany jest co najmniej jeden z filtrów `--surname`, `--name` lub `--place`. Obsługiwane kanoniczne typy to:
+
+- `birth`,
+- `marriage`,
+- `death`,
+- `banns`,
+- `other`.
+
+`banns` jest osobnym typem, a `other` oznacza wyłącznie kategorię „inne” deklarowaną przez providera. Nieznana przyszła kategoria BASIA jest zachowywana jako `provider:basia:<token>` zamiast automatycznie stawać się `other`.
+
+Dodatkowe filtry CLI obejmują `--place`, `--distance-km`, `--similarity`, `--sex`, `--relation` i `--unit-type`. Kody formularza BASIA nie są częścią publicznego API — caller używa wyłącznie kanonicznych wartości.
+
+Fluent API:
+
+```php
+$stats = $basia
+    ->search()
+    ->person('Kowalski', 'Jan')
+    ->years(1880, 1900)
+    ->place('Poznań', 10)
+    ->recordType(RecordType::Birth)
+    ->similarity(70)
+    ->acquire($writer);
+```
+
+BASIA bywa wolna dla szerokich zapytań. HTTP `200` nie jest automatycznie uznawane za sukces: parser wymaga markera ukończonego wyszukiwania. Ucięta odpowiedź nie trafia do cache jako poprawna i nie tworzy checkpointu; należy wtedy zawęzić zapytanie i wykonać je ponownie. Pusty, ale kompletny wynik jest prawidłowym sukcesem.
+
+Link do skanu zwrócony przez BASIA jest zachowywany jako locator / lead do dalszej akwizycji. Ten provider nie pobiera skanów.
+
+Szczegóły: [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).
+
 ### Metryki-Wołyń — Szumsk
 
 ```bash
@@ -139,7 +188,9 @@ Metryki-Wołyń jest pobierany **rok po roku**. Jedna odpowiedź może zawierać
 
 ## Odkrywanie dostępnych parafii
 
-Pakiet udostępnia tryb discovery, który nie pobiera indeksów osób, tylko listę parafii dostępnych w danym portalu. Wynik ma wspólny kontrakt `mytree.available-parish.v1`, dzięki czemu może później zasilać selektor parafii w interfejsie MyTree/Laravel.
+Pakiet udostępnia tryb discovery dla Geneteki i Metryk-Wołyń, który nie pobiera indeksów osób, tylko listę parafii dostępnych w danym portalu. Wynik ma wspólny kontrakt `mytree.available-parish.v1`, dzięki czemu może później zasilać selektor parafii w interfejsie MyTree/Laravel.
+
+**BASIA nie ma w tym zakresie implementacji catalog/parish discovery.** Jest obecnie wyłącznie providerem bounded search.
 
 ### Geneteka — jeden region
 
@@ -225,26 +276,27 @@ Discovery używa własnego cache surowych stron. Domyślnie jest to `var/discove
 
 ## Rate limiting
 
-Domyślnie program czeka co najmniej 2000 ms między kolejnymi żądaniami sieciowymi:
+Domyślnie Geneteka i Metryki-Wołyń czekają co najmniej 2000 ms między kolejnymi żądaniami sieciowymi. BASIA ma bardziej konserwatywny domyślny interwał 5000 ms:
 
 ```bash
---delay-ms=2000
+--delay-ms=5000
 ```
 
-Nie zaleca się zmniejszania tego opóźnienia. Narzędzie jest przeznaczone do kontrolowanego, osobistego pozyskiwania danych. Przed większym pobieraniem należy upewnić się, że sposób użycia jest zgodny z zasadami/regulaminem danego serwisu.
+Nie zaleca się zmniejszania tych opóźnień. Narzędzie jest przeznaczone do kontrolowanego, osobistego pozyskiwania danych. Przed większym pobieraniem należy upewnić się, że sposób użycia jest zgodny z zasadami/regulaminem danego serwisu.
 
 ## Wznawianie
 
 Program zapisuje checkpoint po każdej kompletnej jednostce pracy:
 
 - Geneteka — po stronie wyników,
-- Metryki-Wołyń — po roku.
+- Metryki-Wołyń — po roku,
+- BASIA — po kompletnym bounded search.
 
 Ponowne uruchomienie tego samego polecenia z tym samym `--output` wznowi pracę.
 
-Dla Geneteki cache i checkpointy są rozdzielane według deterministycznego fingerprintu całej konfiguracji zapytania (region, `rid`, typ rekordu, parametry formularza i rozmiar strony). Dzięki temu dwa różne filtry nie mogą przypadkowo współdzielić wyniku cache.
+Dla Geneteki cache i checkpointy są rozdzielane według deterministycznego fingerprintu całej konfiguracji zapytania (region, `rid`, typ rekordu, parametry formularza i rozmiar strony). BASIA używa analogicznego fingerprintu kanonicznej konfiguracji wyszukiwania; provider zapisuje cache dopiero po potwierdzeniu kompletności odpowiedzi.
 
-Surowe odpowiedzi są zapisywane w `raw/`. Jeżeli odpowiedź została pobrana, ale proces przerwał się przed checkpointem, przy wznowieniu program użyje lokalnego cache zamiast ponownie pytać serwis.
+Surowe odpowiedzi są zapisywane w `raw/`. Jeżeli odpowiedź została pobrana, ale proces przerwał się przed checkpointem, przy wznowieniu program użyje lokalnego cache zamiast ponownie pytać serwis, o ile odpowiedź przeszła walidację kompletności.
 
 `records.jsonl` deduplikuje rekordy po `provider_record_id`, dzięki czemu przerwanie w środku jednostki nie powinno tworzyć duplikatów po wznowieniu.
 
@@ -285,6 +337,14 @@ raw/wolyn-metryki/
 └── ...
 ```
 
+Dla BASIA:
+
+```text
+raw/basia/
+├── query_<fingerprint>.html
+└── query_<fingerprint>.html.meta.json
+```
+
 ## Format `ExternalIndexRecord`
 
 Każda linia JSONL ma stabilny kontrakt:
@@ -303,18 +363,19 @@ Każda linia JSONL ma stabilny kontrakt:
 }
 ```
 
-Najważniejsza zasada: `fields` ułatwia dalszą pracę, ale `raw` zachowuje oryginalne wartości indeksu. Narzędzie nie próbuje rozstrzygać niepewności typu `20?`, wariantów nazwiska ani semantyki tekstu w uwagach.
+Najważniejsza zasada: `fields` ułatwia dalszą pracę, ale `raw` zachowuje wartości indeksu. Narzędzie nie próbuje rozstrzygać niepewności typu `20?`, wariantów nazwiska ani semantyki tekstu w uwagach. W BASIA wartości opisowe są dodatkowo oznaczane jako `indexer_rendering`, aby nie sugerować, że są literalnym brzmieniem dokumentu źródłowego.
 
 ## Provenance
 
 Każdy rekord zawiera m.in.:
 
-- URL żądania,
+- URL żądania lub stabilny permalink rekordu,
 - czas pobrania,
 - ścieżkę do surowej odpowiedzi,
 - SHA-256 surowej odpowiedzi,
-- parametr parafii/regionu,
-- indeks wiersza/strony lub roku.
+- konfigurację/fingerprint zapytania właściwe dla providera,
+- indeks wiersza/strony/roku lub wyniku,
+- wersję parsera tam, gdzie ma to znaczenie dla odtwarzalności.
 
 Dzięki temu późniejszy importer MyTree może utworzyć `Source`, `SourceLocator`, `Mention` i `Claim` bez utraty informacji o pochodzeniu.
 
@@ -338,8 +399,8 @@ Bezpośrednie uruchomienie PHPUnit:
 vendor/bin/phpunit
 ```
 
-Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych.
+Normalny zestaw testów jest offline i nie powinien zależeć od dostępności serwisów zewnętrznych. BASIA ma statyczne fixtures dla wyniku mieszanego, pustego, uciętego i strukturalnie niepoprawnego.
 
 ## Integracja z Laravel/MyTree
 
-Zobacz [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md).
+Zobacz [docs/LARAVEL_INTEGRATION.md](docs/LARAVEL_INTEGRATION.md) oraz [docs/BASIA_ACQUISITION.md](docs/BASIA_ACQUISITION.md).

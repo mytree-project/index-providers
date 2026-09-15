@@ -7,7 +7,8 @@ require dirname(__DIR__) . '/bootstrap.php';
 
 use MyTree\IndexProviders\Domain\AvailableParish;
 use MyTree\IndexProviders\Domain\RecordType;
-use MyTree\IndexProviders\Http\NativeHttpClient;
+use MyTree\IndexProviders\Http\DefaultHttpClientFactory;
+use MyTree\IndexProviders\Provider\BasiaProvider;
 use MyTree\IndexProviders\Provider\GenetekaProvider;
 use MyTree\IndexProviders\Provider\WolynMetrykiProvider;
 use MyTree\IndexProviders\Storage\JsonCheckpointStore;
@@ -31,6 +32,11 @@ Download indexes — Metryki-Wołyń:
     --parish=Szumsk --from=1731 --to=1943 \
     --output=var/szumsk
 
+Bounded search — BASIA:
+  php bin/mytree-index basia \
+    --surname=Kowalski --name=Jan --from=1880 --to=1900 \
+    --type=birth --output=var/basia-kowalski
+
 Discover available parishes — Geneteka, one region:
   php bin/mytree-index geneteka --list-parishes --region=06mp
 
@@ -53,8 +59,8 @@ Discovery options:
   --output=DIR      Optional discovery cache directory (default var/discovery-cache)
 
 Common acquisition options:
-  --delay-ms=2000   Minimum delay between network requests (default 2000)
-  --timeout=60      HTTP timeout in seconds
+  --delay-ms=...    Minimum delay between requests (default 2000; BASIA 5000)
+  --timeout=...     HTTP timeout in seconds (default 60; BASIA 200)
   --restart         Ignore checkpoints/cache, truncate records.jsonl and fetch again
   --help            Show this help
 
@@ -73,6 +79,19 @@ Geneteka acquisition options:
   --exclude-parents Do not search parent fields (`parents=1`)
   --page-size=50    Page size (default 50)
   --availability    Discover type-specific rid values and non-continuous year ranges
+
+BASIA bounded-search options:
+  --surname=...     Indexed surname; at least surname, name or place is required
+  --name=...        Indexed given name
+  --from=YYYY       Optional first year
+  --to=YYYY         Optional last year
+  --place=...       Optional locality/place filter
+  --distance-km=10  Place radius in kilometres (default 10)
+  --type=...        Optional type: birth, marriage, death, banns or other
+  --similarity=60   Fuzzy-match similarity percentage (0-100, default 60)
+  --sex=...         any, male or female
+  --relation=...    any, parent_or_spouse, child or other
+  --unit-type=...   any, usc, catholic, evangelical or other
 
 Metryki-Wołyń acquisition options:
   --parish=...      Parish name, e.g. Szumsk
@@ -229,6 +248,22 @@ function genetekaRecordType(string $value): RecordType
     return $type;
 }
 
+/** @return list<RecordType> */
+function basiaSupportedRecordTypes(): array
+{
+    return [RecordType::Birth, RecordType::Marriage, RecordType::Death, RecordType::Banns, RecordType::Other];
+}
+
+function basiaRecordType(string $value): RecordType
+{
+    $type = RecordType::tryFrom(strtolower(trim($value)));
+    if ($type === null || !in_array($type, basiaSupportedRecordTypes(), true)) {
+        throw new InvalidArgumentException("Unsupported BASIA record type '$value'. Use birth, marriage, death, banns or other.");
+    }
+
+    return $type;
+}
+
 $command = $argv[1] ?? null;
 if ($command === null || in_array($command, ['help', '--help', '-h'], true)) {
     usage(0);
@@ -241,9 +276,15 @@ if (isset($options['help'])) {
 $discoveryMode = isset($options['list-parishes']);
 $restart = isset($options['restart']);
 $refresh = isset($options['refresh']) || $restart;
-$delayMs = max(0, (int) ($options['delay-ms'] ?? 2000));
-$timeout = max(5, (int) ($options['timeout'] ?? 60));
-$http = new NativeHttpClient(timeoutSeconds: $timeout);
+$isBasia = $command === 'basia';
+$delayDefault = $isBasia ? BasiaProvider::DEFAULT_MINIMUM_DELAY_MS : 2000;
+$timeoutDefault = $isBasia ? BasiaProvider::DEFAULT_TIMEOUT_SECONDS : 60;
+$delayMs = max(0, (int) ($options['delay-ms'] ?? $delayDefault));
+$timeout = max(5, (int) ($options['timeout'] ?? $timeoutDefault));
+$http = DefaultHttpClientFactory::create(
+    timeoutSeconds: $timeout,
+    retryableMethods: $isBasia ? ['GET', 'HEAD', 'POST'] : ['GET', 'HEAD'],
+);
 $rateLimiter = new RateLimiter($delayMs);
 $progress = new ConsoleProgressReporter();
 
@@ -264,7 +305,7 @@ if ($discoveryMode) {
             $provider = new WolynMetrykiProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
             $parishes = $provider->listParishes($refresh);
         } else {
-            fwrite(STDERR, "Unknown command: $command\n");
+            fwrite(STDERR, "Unknown or unsupported discovery command: $command\n");
             usage(2);
         }
 
@@ -368,6 +409,40 @@ try {
         $stats = $acquisition->acquire($writer);
         $config = $acquisition->configuration();
         $providerName = 'geneteka';
+    } elseif ($command === 'basia') {
+        $provider = new BasiaProvider($http, $checkpoints, $rawStore, $rateLimiter, progress: $progress);
+        $search = $provider->search()->force($restart)->person(
+            isset($options['surname']) && is_string($options['surname']) ? $options['surname'] : null,
+            isset($options['name']) && is_string($options['name']) ? $options['name'] : null,
+        );
+        if (isset($options['from']) && is_string($options['from'])) {
+            $search = $search->fromYear((int) $options['from']);
+        }
+        if (isset($options['to']) && is_string($options['to'])) {
+            $search = $search->toYear((int) $options['to']);
+        }
+        if (isset($options['place']) && is_string($options['place'])) {
+            $search = $search->place($options['place'], max(0, (int) ($options['distance-km'] ?? 10)));
+        }
+        if (isset($options['type']) && is_string($options['type'])) {
+            $search = $search->recordType(basiaRecordType($options['type']));
+        }
+        if (isset($options['similarity']) && is_string($options['similarity'])) {
+            $search = $search->similarity((int) $options['similarity']);
+        }
+        if (isset($options['sex']) && is_string($options['sex'])) {
+            $search = $search->sex($options['sex']);
+        }
+        if (isset($options['relation']) && is_string($options['relation'])) {
+            $search = $search->relation($options['relation']);
+        }
+        if (isset($options['unit-type']) && is_string($options['unit-type'])) {
+            $search = $search->unitType($options['unit-type']);
+        }
+
+        $stats = $search->acquire($writer);
+        $config = $search->configuration();
+        $providerName = 'basia';
     } elseif ($command === 'wolyn') {
         $parish = required($options, 'parish');
         $from = (int) required($options, 'from');
