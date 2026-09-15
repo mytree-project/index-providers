@@ -8,7 +8,8 @@ Provider
   ├── Psr\Http\Message\RequestFactoryInterface (PSR-17)
   ├── CheckpointStoreInterface
   ├── RawResponseStore
-  └── RecordWriterInterface
+  ├── RecordWriterInterface
+  └── optional IndexCatalogDiscoveryInterface
 ```
 
 Requesty i responses używają kontraktów PSR-7. Providerzy pozostają framework-independent i nie zależą od Eloquent ani Laravel HTTP Client.
@@ -114,9 +115,9 @@ $basia = new BasiaProvider(
 );
 ```
 
-BASIA jest providerem **bounded search**. Warstwa Laravel/Acquisition Manager powinna przekazywać świadomie zawężone zapytanie, a nie próbować iterować całego portalu. `BasiaIncompleteResponseException` oznacza, że HTTP mogło zakończyć się statusem `200`, ale strona nie zawiera markera kompletnego wyszukiwania; taki wynik nie jest sukcesem cache/checkpointu. Orkiestrator powinien wtedy zawęzić zapytanie lub przekazać błąd użytkownikowi, a nie wykonywać bezwarunkową pętlę retry.
+BASIA search jest capability **bounded search**. Warstwa Laravel/Acquisition Manager powinna przekazywać świadomie zawężone zapytanie, a nie próbować iterować całego portalu. `BasiaIncompleteResponseException` oznacza, że HTTP mogło zakończyć się statusem `200`, ale strona nie zawiera markera kompletnego wyszukiwania; taki wynik nie jest sukcesem cache/checkpointu. Orkiestrator powinien wtedy zawęzić zapytanie lub przekazać błąd użytkownikowi, a nie wykonywać bezwarunkową pętlę retry.
 
-BASIA nie implementuje obecnie catalog/parish discovery. To celowe ograniczenie zakresu.
+Ten sam `BasiaProvider` implementuje także niezależną opcjonalną capability `IndexCatalogDiscoveryInterface`. Katalog jest pobierany przez `GET content-all.php?lang=pl`, parsowany przed zapisaniem reusable cache i zwraca `IndexCatalogUnit[]`. To discovery opisuje dostępność indeksów, nie rekordy osób i nie MyTree `Source`.
 
 ## Pozostałe adaptery MyTree
 
@@ -159,15 +160,19 @@ Dla większych importów naturalnym krokiem będzie rozbijanie pracy na małe jo
 
 - Geneteka: `(region, rid, type, page)`,
 - Metryki-Wołyń: `(parish, year)`,
-- BASIA: jedno jawnie ograniczone zapytanie opisane przez fingerprint kanonicznej konfiguracji.
+- BASIA bounded search: jedno jawnie ograniczone zapytanie opisane przez fingerprint kanonicznej konfiguracji.
 
 Dla BASIA nie należy automatycznie generować szerokiej siatki zapytań w celu zmirrorowania całego portalu. Ewentualne przyszłe planowanie/partycjonowanie wymaga osobnej decyzji architektonicznej.
 
+Catalog discovery jest osobnym, pojedynczym snapshotem dostępności. Nie powinien być zamieniany w kolejkę rekordów osób ani traktowany jako dowód kompletności dowolnego szerokiego search query.
+
 ## Idempotencja
 
-`provider_record_id` powinien mieć unikalny indeks w tabeli stagingowej. Dzięki temu retry joba nie utworzy duplikatu.
+`provider_record_id` powinien mieć unikalny indeks w tabeli stagingowej rekordów osób. Dzięki temu retry joba nie utworzy duplikatu.
 
-BASIA preferuje stabilny providerowy identyfikator numeryczny; gdy go brakuje, adapter tworzy deterministyczny fallback na podstawie dostępnego permalinku i zmapowanych danych.
+BASIA search preferuje stabilny providerowy identyfikator numeryczny; gdy go brakuje, adapter tworzy deterministyczny fallback na podstawie dostępnego permalinku i zmapowanych danych.
+
+`IndexCatalogUnit::catalogUnitKey` ma inną rolę: jest deterministycznym provider-local kluczem jednostki discovery. Nie jest `SourceId`, nie jest `provider_record_id` i nie powinien być używany do cross-provider source reconciliation.
 
 ## Granica odpowiedzialności
 
@@ -178,13 +183,15 @@ Provider ma pozyskiwać i wiernie reprezentować indeks. Nie powinien:
 - normalizować wariantów nazw jako „prawdę”,
 - traktować miejsca zdarzenia jako miejsca zamieszkania,
 - interpretować tekstu uwag jako pewnych relacji bez osobnej warstwy ekstrakcji,
-- traktować indekserskiego zapisu BASIA jako literalnego tekstu dokumentu źródłowego.
+- traktować indekserskiego zapisu BASIA jako literalnego tekstu dokumentu źródłowego,
+- traktować katalogowej jednostki jako historycznego `Source`,
+- zamieniać USC/civil registry na parafię dla wygody UI.
 
-BASIA używa `ValueRepresentation::indexerRendering(...)`, dzięki czemu importer może zachować informację, że wartości mogą obejmować transkrypcję, transliterację, tłumaczenie lub normalizację wykonaną przez indeksującego.
+BASIA search używa `ValueRepresentation::indexerRendering(...)`, dzięki czemu importer może zachować informację, że wartości mogą obejmować transkrypcję, transliterację, tłumaczenie lub normalizację wykonaną przez indeksującego.
 
-## Discovery parafii
+## Discovery parafii — kompatybilny kontrakt legacy
 
-Providerzy Geneteki i Metryk-Wołyń udostępniają warstwę discovery niezależną od pobierania rekordów:
+Providerzy Geneteki i Metryk-Wołyń zachowują dotychczasową warstwę discovery niezależną od pobierania rekordów:
 
 ```php
 $parishes = $geneteka->listParishes('06mp');
@@ -219,5 +226,79 @@ konfiguracja zadania acquisition
 Lista discovery nie powinna być wiązana z modelem `Person`. Może być cachowana osobno (np. tabela `external_provider_parishes` lub Laravel Cache), wraz z `retrieved_at` i surowym payloadem dla audytu.
 
 Dla Geneteki warto przechowywać `region_code + provider_parish_id` jako klucz zewnętrzny. Dla Metryki-Wołyń obecnie kluczem wejściowym jest nazwa parafii, więc lokalny rekord discovery powinien zachować również dokładną pisownię zwróconą przez portal.
+
+`AvailableParish` / `mytree.available-parish.v1` nie jest automatycznie zastępowany przez nowy kontrakt. Migracja/deprecjacja tego API wymaga osobnej decyzji.
+
+## Generalized index catalog discovery
+
+Provider, który potrafi opisać szerszy katalog jednostek indeksowanych, może implementować opcjonalny:
+
+```text
+IndexCatalogDiscoveryInterface
+    → IndexCatalogUnit[]
+```
+
+BASIA implementuje ten kontrakt bez dodawania sztucznego `listParishes()`.
+
+`IndexCatalogUnit` rozdziela:
+
+```text
+locality/place
+    ↓
+indexed / records-holding unit
+    ↓
+availability by record type
+```
+
+To pozwala jednej miejscowości mieć równolegle:
+
+```text
+Catholic parish
+Protestant parish
+Registry Office / USC
+provider-defined other unit
+```
+
+bez utraty semantyki. Schemat serializowany to `mytree.index-catalog-unit.v1`.
+
+Przykład użycia:
+
+```php
+use MyTree\IndexProviders\Contracts\IndexCatalogDiscoveryInterface;
+
+if ($basia instanceof IndexCatalogDiscoveryInterface) {
+    $units = $basia->listCatalogUnits();
+}
+```
+
+W warstwie Laravel można przechować snapshoty katalogu np. w osobnej tabeli `external_provider_catalog_units` albo w dedykowanym cache. Warto zachować co najmniej:
+
+```text
+provider
+catalog_unit_key
+serialized mytree.index-catalog-unit.v1 payload
+retrieved_at
+raw-response provenance / hash
+```
+
+Nie należy mapować `IndexCatalogUnit` bezpośrednio do `Source`, `Person` ani relacji parafialnej. To dane planistyczne/discovery, które mogą później zasilać selektory i konfigurację Acquisition Managera.
+
+Przykładowy przyszły UI flow:
+
+```text
+Provider = BASIA
+    ↓
+IndexCatalogUnit discovery/cache
+    ↓
+locality
+    ↓
+unit (parish / civil registry / other)
+    ↓
+record type + advertised YearRange[]
+    ↓
+bounded acquisition job configuration
+```
+
+Nieciągłe `YearRange[]` należy prezentować bez sztucznego rozszerzania do jednego min/max. Provider-wide/locality-wide totals również nie mogą być przedstawiane jako liczba rekordów konkretnego typu, jeśli upstream tego nie rozróżnia.
 
 Więcej o BASIA: [BASIA_ACQUISITION.md](BASIA_ACQUISITION.md).
