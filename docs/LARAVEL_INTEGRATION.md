@@ -1,6 +1,6 @@
-# Integracja z Laravel / MyTree
+# Laravel / MyTree integration
 
-Pakiet rozdziela odpowiedzialności providerów od infrastruktury aplikacji-hostującej:
+The package separates provider responsibilities from host-application infrastructure:
 
 ```text
 Provider
@@ -12,24 +12,26 @@ Provider
   └── optional IndexCatalogDiscoveryInterface
 ```
 
-Requesty i responses używają kontraktów PSR-7. Providerzy pozostają framework-independent i nie zależą od Eloquent ani Laravel HTTP Client.
+Requests and responses use PSR-7 contracts. Providers remain framework-independent and do not depend on Eloquent or Laravel HTTP Client.
 
-## Domyślna implementacja HTTP
+This document describes integration boundaries. Actual provider registration, UI configuration, persistence adapters, and acquisition orchestration belong to the MyTree web application integration milestone rather than to this standalone package.
 
-Standalone `mytree/index-providers` instaluje Guzzle 7 i używa go jako domyślnej implementacji PSR-18. `DefaultHttpClientFactory` składa transport z:
+## Default HTTP composition
 
-- Guzzle jako klienta sieciowego,
-- jawnej obsługi redirectów dla `GET`/`HEAD`,
-- ograniczonego retry dla błędów transportowych, `429` i `5xx`,
-- konfigurowalnego timeoutu i User-Agent.
+Standalone `mytree/index-providers` installs Guzzle 7 and uses it as the default PSR-18 implementation. `DefaultHttpClientFactory` composes:
 
-`NativeHttpClient` pozostaje tymczasowo jako deprecated compatibility shim, ale sam implementuje już PSR-18 i nie jest publiczną granicą integracyjną.
+- Guzzle as the network client,
+- explicit redirect handling for `GET`/`HEAD`,
+- bounded retry for transport failures, HTTP `429`, and `5xx`,
+- configurable timeout and User-Agent.
 
-## Wstrzyknięcie klienta przez MyTree
+`NativeHttpClient` remains temporarily as a deprecated compatibility shim. It implements PSR-18 and is not the public integration boundary.
 
-MyTree nie musi używać domyślnego klienta. Provider przyjmuje dowolny `Psr\Http\Client\ClientInterface`. Można również podać własny `RequestFactoryInterface`, a provider wymagający body także `StreamFactoryInterface`.
+## Injecting HTTP from MyTree
 
-Przykład z Guzzle:
+MyTree does not need to use the default client. Every provider accepts a `Psr\Http\Client\ClientInterface`. A host may also inject its own `RequestFactoryInterface` and, when request bodies are required, `StreamFactoryInterface`.
+
+Example with Guzzle:
 
 ```php
 use GuzzleHttp\Client;
@@ -54,11 +56,11 @@ $provider = new GenetekaProvider(
 );
 ```
 
-Ta sama zasada działa z innym klientem zgodnym z PSR-18. Provider nie powinien znać sposobu konfiguracji kontenera ani konkretnej biblioteki HTTP hosta.
+The same principle applies to any compatible PSR-18 client. A provider should not know how the host service container or HTTP library is configured.
 
 ### Laravel service container
 
-W aplikacji MyTree naturalną granicą jest composition root / service provider:
+A natural MyTree composition boundary is a service provider/composition root:
 
 ```php
 use Psr\Http\Client\ClientInterface;
@@ -78,23 +80,23 @@ $this->app->singleton(StreamFactoryInterface::class, function () {
 });
 ```
 
-Nie jest wymagany adapter `LaravelHttpClient implements MyTreeHttpClientInterface`, ponieważ pakiet nie definiuje już własnego interfejsu klienta HTTP.
+An adapter such as `LaravelHttpClient implements MyTreeHttpClientInterface` is not required because the package no longer defines a custom HTTP-client contract.
 
-## Retry, timeout i rate limiting
+## Retry, timeout, redirects, and rate limiting
 
-PSR-18 celowo nie definiuje timeoutów ani retry. Są one częścią composition/infrastructure:
+PSR-18 deliberately does not define timeout or retry semantics. They belong to composition/infrastructure:
 
-- timeout jest konfiguracją konkretnego klienta,
-- retry może być realizowane przez `RetryingHttpClient`, który również implementuje PSR-18,
-- domyślne retry obejmuje tylko `GET` i `HEAD`,
-- provider wymagający bezpiecznego read-only `POST` musi jawnie włączyć `POST` do polityki retry,
-- rate limiting pozostaje osobnym mechanizmem providera i nie jest częścią PSR-18.
+- timeout is configuration of the concrete client,
+- `RetryingHttpClient` provides bounded retry while remaining PSR-18 compatible,
+- retry defaults to `GET` and `HEAD`,
+- a provider that uses a replayable read-only `POST` must explicitly include `POST` in its retry policy,
+- provider rate limiting remains separate from PSR-18.
 
-Redirecty są obsługiwane jawnie dla `GET`/`HEAD`. Nie zakładamy, że `sendRequest()` konkretnej implementacji automatycznie podąża za redirectami.
+Redirects are handled explicitly for `GET`/`HEAD`; callers should not assume that an arbitrary PSR-18 implementation automatically follows redirects.
 
-### BASIA
+### BASIA HTTP composition
 
-BASIA używa publicznego formularza rozszerzonego przesyłanego jako odczytowy `POST application/x-www-form-urlencoded`. Dla kompozycji MyTree zalecane są konserwatywne wartości zgodne z CLI:
+BASIA bounded search submits the public advanced form as read-only `POST application/x-www-form-urlencoded`. A conservative MyTree composition should match the standalone defaults:
 
 ```php
 use MyTree\IndexProviders\Http\DefaultHttpClientFactory;
@@ -115,25 +117,25 @@ $basia = new BasiaProvider(
 );
 ```
 
-BASIA search jest capability **bounded search**. Warstwa Laravel/Acquisition Manager powinna przekazywać świadomie zawężone zapytanie, a nie próbować iterować całego portalu. `BasiaIncompleteResponseException` oznacza, że HTTP mogło zakończyć się statusem `200`, ale strona nie zawiera markera kompletnego wyszukiwania; taki wynik nie jest sukcesem cache/checkpointu. Orkiestrator powinien wtedy zawęzić zapytanie lub przekazać błąd użytkownikowi, a nie wykonywać bezwarunkową pętlę retry.
+BASIA search is a **bounded-search capability**. The Laravel/Acquisition Manager layer should submit deliberately constrained queries rather than iterate or mirror the full portal. `BasiaIncompleteResponseException` means the HTTP response may have been `200` but the page did not contain the upstream search-complete marker. Such a response is not a successful cache/checkpoint result; the orchestration layer should narrow the query or surface the problem to the user instead of entering an unconditional retry loop.
 
-Ten sam `BasiaProvider` implementuje także niezależną opcjonalną capability `IndexCatalogDiscoveryInterface`. Katalog jest pobierany przez `GET content-all.php?lang=pl`, parsowany przed zapisaniem reusable cache i zwraca `IndexCatalogUnit[]`. To discovery opisuje dostępność indeksów, nie rekordy osób i nie MyTree `Source`.
+The same `BasiaProvider` also implements the independent optional `IndexCatalogDiscoveryInterface`. Catalog discovery performs `GET content-all.php?lang=pl`, parses the snapshot before reusable-cache promotion, and returns `IndexCatalogUnit[]`. This describes provider-published index availability, not person records and not MyTree `Source` entities.
 
-## Pozostałe adaptery MyTree
+## Host adapters
 
 ### `LaravelCheckpointStore`
 
-Implementuje `CheckpointStoreInterface`. Możliwe backendy:
+A future MyTree adapter can implement `CheckpointStoreInterface`. Possible backends include:
 
-- tabela PostgreSQL — najlepsza do audytu,
-- Cache/Redis — szybsze, ale mniej trwałe,
-- Laravel Storage — najbliższe aktualnej wersji CLI.
+- PostgreSQL table — strongest auditability,
+- Cache/Redis — fast but less durable,
+- Laravel Storage — closest to the current standalone CLI implementation.
 
 ### `MyTreeExternalIndexWriter`
 
-Implementuje `RecordWriterInterface` i zapisuje `ExternalIndexRecord` do warstwy stagingowej MyTree, **nie bezpośrednio do `Person`**.
+A MyTree adapter can implement `RecordWriterInterface` and write `ExternalIndexRecord` to a staging/acquisition boundary, **not directly to `Person`**.
 
-Proponowany przepływ:
+Recommended flow:
 
 ```text
 ExternalIndexRecord
@@ -148,57 +150,61 @@ Claim
 SourceLocator
 ```
 
-Warstwa stagingowa powinna zachować `provider_record_id`, `raw`, `fields` i pełne `provenance`.
+The staging layer should retain `provider_record_id`, `raw`, `fields`, `representation`, and full `provenance`.
 
-Dla BASIA `parish` może być `null`, nawet gdy wynik ma lokalizację i jednostkę. BASIA indeksuje również jednostki niebędące parafiami (np. USC), więc importer nie powinien wymuszać semantyki parafii na providerowym miejscu/jednostce.
+For BASIA, `parish` may be `null` even when the result carries locality/unit information. BASIA also indexes non-parish units such as civil registry offices, so an importer must not force provider locality/unit data into parish semantics.
 
-Link do skanu w rekordzie BASIA jest locatorem / leadem do dalszej akwizycji. Nie powinien być automatycznie traktowany jako pobrany `SourceAsset`; pobranie należy do osobnego scan-provider boundary.
+A scan URL in a BASIA record is a locator/acquisition lead. It must not be treated automatically as a downloaded `SourceAsset`; downloading belongs to the separate scan-provider boundary.
 
-## Kolejki
+## Queue/job boundaries
 
-Dla większych importów naturalnym krokiem będzie rozbijanie pracy na małe joby:
+For larger acquisitions, useful work units are naturally provider-specific:
 
 - Geneteka: `(region, rid, type, page)`,
 - Metryki-Wołyń: `(parish, year)`,
-- BASIA bounded search: jedno jawnie ograniczone zapytanie opisane przez fingerprint kanonicznej konfiguracji.
+- BASIA bounded search: one explicitly constrained query identified by the fingerprint of its canonical configuration.
 
-Dla BASIA nie należy automatycznie generować szerokiej siatki zapytań w celu zmirrorowania całego portalu. Ewentualne przyszłe planowanie/partycjonowanie wymaga osobnej decyzji architektonicznej.
+Do not automatically generate a broad BASIA query grid to mirror the portal. Any future planning/partitioning strategy requires a separate architecture decision above the provider.
 
-Catalog discovery jest osobnym, pojedynczym snapshotem dostępności. Nie powinien być zamieniany w kolejkę rekordów osób ani traktowany jako dowód kompletności dowolnego szerokiego search query.
+Catalog discovery is a separate provider snapshot. It must not be turned into a queue of person records or treated as proof that an arbitrary broad BASIA search query would be complete.
 
-## Idempotencja
+## Idempotency and identities
 
-`provider_record_id` powinien mieć unikalny indeks w tabeli stagingowej rekordów osób. Dzięki temu retry joba nie utworzy duplikatu.
+`provider_record_id` should normally have a unique constraint in the staging table so retrying a job does not create duplicates.
 
-BASIA search preferuje stabilny providerowy identyfikator numeryczny; gdy go brakuje, adapter tworzy deterministyczny fallback na podstawie dostępnego permalinku i zmapowanych danych.
+BASIA search prefers the provider's stable numeric record identifier. If it is missing, the adapter creates a deterministic fallback from the available permalink and mapped record data.
 
-`IndexCatalogUnit::catalogUnitKey` ma inną rolę: jest deterministycznym provider-local kluczem jednostki discovery. Nie jest `SourceId`, nie jest `provider_record_id` i nie powinien być używany do cross-provider source reconciliation.
+`IndexCatalogUnit::catalogUnitKey` has a different role. It is a deterministic provider-local discovery key. It is not a `SourceId`, not a `provider_record_id`, and must not be used for cross-provider source reconciliation.
 
-## Granica odpowiedzialności
+Metryki-Wołyń also preserves unknown future section types as provider-qualified opaque `record_type` values. For such a section the provider retains the raw table without guessing column semantics; a host importer must treat the corresponding `fields.provider_table` projection as opaque provider data unless a later mapping is explicitly accepted.
 
-Provider ma pozyskiwać i wiernie reprezentować indeks. Nie powinien:
+## Responsibility boundary
 
-- scalać osób,
-- tworzyć hipotez tożsamości,
-- normalizować wariantów nazw jako „prawdę”,
-- traktować miejsca zdarzenia jako miejsca zamieszkania,
-- interpretować tekstu uwag jako pewnych relacji bez osobnej warstwy ekstrakcji,
-- traktować indekserskiego zapisu BASIA jako literalnego tekstu dokumentu źródłowego,
-- traktować katalogowej jednostki jako historycznego `Source`,
-- zamieniać USC/civil registry na parafię dla wygody UI.
+An Index Provider acquires and faithfully represents external index/catalog data. It must not:
 
-BASIA search używa `ValueRepresentation::indexerRendering(...)`, dzięki czemu importer może zachować informację, że wartości mogą obejmować transkrypcję, transliterację, tłumaczenie lub normalizację wykonaną przez indeksującego.
+- merge historical people,
+- create identity hypotheses,
+- normalize a name variant into authoritative truth,
+- treat event place as residence without supporting evidence,
+- interpret free-text notes as certain relations without a separate extraction layer,
+- treat a BASIA indexer rendering as literal archival-document wording,
+- treat an `IndexCatalogUnit` as a historical `Source`,
+- convert a civil registry office into a parish for UI convenience.
 
-## Discovery parafii — kompatybilny kontrakt legacy
+BASIA search uses `ValueRepresentation::indexerRendering(...)`, preserving that indexed descriptive values may include transcription, transliteration, translation, or normalization performed by an indexer.
 
-Providerzy Geneteki i Metryk-Wołyń zachowują dotychczasową warstwę discovery niezależną od pobierania rekordów:
+Name processing remains downstream of this package. Provider values stay source/provider faithful; normalization/transliteration candidates belong to the separate name-processing boundary.
+
+## Legacy parish discovery
+
+Geneteka and Metryki-Wołyń retain the existing parish-oriented discovery APIs:
 
 ```php
 $parishes = $geneteka->listParishes('06mp');
 $parishes = $wolyn->listParishes();
 ```
 
-Każdy element jest `AvailableParish` i ma wspólny kontrakt:
+Each result is an `AvailableParish` with:
 
 ```text
 provider
@@ -209,38 +215,38 @@ regionName
 metadata
 ```
 
-W przyszłej wtyczce Laravel naturalne zastosowanie to:
+A future Laravel flow may use this data as:
 
 ```text
 Provider selection
     ↓
-region (jeśli wymagany)
+region (when required)
     ↓
 AvailableParish[]
     ↓
-Filament Select / searchable relation-like picker
+Filament Select / searchable picker
     ↓
-konfiguracja zadania acquisition
+acquisition-job configuration
 ```
 
-Lista discovery nie powinna być wiązana z modelem `Person`. Może być cachowana osobno (np. tabela `external_provider_parishes` lub Laravel Cache), wraz z `retrieved_at` i surowym payloadem dla audytu.
+Parish discovery data should not be attached to `Person`. It may be cached separately, for example in an `external_provider_parishes` table or Laravel Cache, together with retrieval metadata and raw provenance.
 
-Dla Geneteki warto przechowywać `region_code + provider_parish_id` jako klucz zewnętrzny. Dla Metryki-Wołyń obecnie kluczem wejściowym jest nazwa parafii, więc lokalny rekord discovery powinien zachować również dokładną pisownię zwróconą przez portal.
+For Geneteka, `region_code + provider_parish_id` is a useful provider-local key. For Metryki-Wołyń the current search input identifies a parish by name, so local discovery storage should retain the exact provider spelling.
 
-`AvailableParish` / `mytree.available-parish.v1` nie jest automatycznie zastępowany przez nowy kontrakt. Migracja/deprecjacja tego API wymaga osobnej decyzji.
+`AvailableParish` / `mytree.available-parish.v1` is not automatically replaced by the generalized contract. Deprecating or migrating this API requires a separate compatibility decision.
 
 ## Generalized index catalog discovery
 
-Provider, który potrafi opisać szerszy katalog jednostek indeksowanych, może implementować opcjonalny:
+A provider that can describe a broader indexed-content catalog may implement:
 
 ```text
 IndexCatalogDiscoveryInterface
     → IndexCatalogUnit[]
 ```
 
-BASIA implementuje ten kontrakt bez dodawania sztucznego `listParishes()`.
+BASIA implements this contract without adding a fake `listParishes()` projection.
 
-`IndexCatalogUnit` rozdziela:
+`IndexCatalogUnit` separates:
 
 ```text
 locality/place
@@ -250,7 +256,7 @@ indexed / records-holding unit
 availability by record type
 ```
 
-To pozwala jednej miejscowości mieć równolegle:
+One locality may therefore expose, for example:
 
 ```text
 Catholic parish
@@ -259,9 +265,9 @@ Registry Office / USC
 provider-defined other unit
 ```
 
-bez utraty semantyki. Schemat serializowany to `mytree.index-catalog-unit.v1`.
+without semantic coercion. Serialized output uses `mytree.index-catalog-unit.v1`.
 
-Przykład użycia:
+Example:
 
 ```php
 use MyTree\IndexProviders\Contracts\IndexCatalogDiscoveryInterface;
@@ -271,7 +277,7 @@ if ($basia instanceof IndexCatalogDiscoveryInterface) {
 }
 ```
 
-W warstwie Laravel można przechować snapshoty katalogu np. w osobnej tabeli `external_provider_catalog_units` albo w dedykowanym cache. Warto zachować co najmniej:
+A Laravel integration may cache catalog snapshots in a dedicated table such as `external_provider_catalog_units` or another explicit cache. Useful retained data includes:
 
 ```text
 provider
@@ -281,9 +287,9 @@ retrieved_at
 raw-response provenance / hash
 ```
 
-Nie należy mapować `IndexCatalogUnit` bezpośrednio do `Source`, `Person` ani relacji parafialnej. To dane planistyczne/discovery, które mogą później zasilać selektory i konfigurację Acquisition Managera.
+Do not map `IndexCatalogUnit` directly to `Source`, `Person`, or a parish relationship. It is discovery/planning data that can feed selectors and Acquisition Manager configuration.
 
-Przykładowy przyszły UI flow:
+A possible future UI flow is:
 
 ```text
 Provider = BASIA
@@ -296,9 +302,9 @@ unit (parish / civil registry / other)
     ↓
 record type + advertised YearRange[]
     ↓
-bounded acquisition job configuration
+bounded acquisition-job configuration
 ```
 
-Nieciągłe `YearRange[]` należy prezentować bez sztucznego rozszerzania do jednego min/max. Provider-wide/locality-wide totals również nie mogą być przedstawiane jako liczba rekordów konkretnego typu, jeśli upstream tego nie rozróżnia.
+Discontinuous `YearRange[]` should remain discontinuous in the UI rather than being widened to a single minimum/maximum range. Likewise, locality-wide/provider-wide totals must not be shown as per-record-type counts unless the upstream service publishes that distinction.
 
-Więcej o BASIA: [BASIA_ACQUISITION.md](BASIA_ACQUISITION.md).
+See [BASIA_ACQUISITION.md](BASIA_ACQUISITION.md) for BASIA-specific behavior.
